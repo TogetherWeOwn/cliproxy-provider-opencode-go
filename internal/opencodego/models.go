@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	kit "github.com/TogetherWeOwn/cliproxy-provider-kit"
@@ -49,6 +50,10 @@ type catalog struct {
 	client *kit.QuotaHTTPClient
 	mu     sync.Mutex
 	cache  map[[32]byte]catalogEntry
+	// hostProxy is the host's global proxy-url from the latest ModelsForAuth.
+	// Executor requests do not carry host config, so discovery on that path
+	// reuses it as the fallback when the auth has no proxy_url.
+	hostProxy atomic.Pointer[string]
 }
 
 func newCatalog(base string, transport http.RoundTripper) *catalog {
@@ -73,6 +78,8 @@ func (c *catalog) StaticModels(context.Context, pluginapi.StaticModelRequest) (p
 	return pluginapi.ModelResponse{Provider: provider, Models: modelList(staticRoutes())}, nil
 }
 func (c *catalog) ModelsForAuth(ctx context.Context, r pluginapi.AuthModelRequest) (pluginapi.ModelResponse, error) {
+	hostProxy := r.Host.ProxyURL
+	c.hostProxy.Store(&hostProxy)
 	routes, err := c.load(ctx, r.StorageJSON, r.Metadata)
 	if err != nil {
 		return pluginapi.ModelResponse{}, err
@@ -104,7 +111,13 @@ func (c *catalog) load(ctx context.Context, storage []byte, metadata map[string]
 	if ok && time.Now().Before(entry.expires) {
 		return entry.routes, nil
 	}
-	resp, err := c.client.Do(ctx, pluginapi.HTTPRequest{URL: c.base() + "/inference/go/v1/models", Headers: http.Header{"Authorization": {"Bearer " + key}, "Accept": {"application/json"}, "User-Agent": {"cliproxy-provider-opencode-go/0.1.0"}}})
+	hostProxy := ""
+	if p := c.hostProxy.Load(); p != nil {
+		hostProxy = *p
+	}
+	// Discovery sends the key directly, so route it like host requests.
+	proxyCtx := kit.WithProxyURL(ctx, kit.AuthProxyURL(storage, metadata, hostProxy))
+	resp, err := c.client.Do(proxyCtx, pluginapi.HTTPRequest{URL: c.base() + "/inference/go/v1/models", Headers: http.Header{"Authorization": {"Bearer " + key}, "Accept": {"application/json"}, "User-Agent": {"cliproxy-provider-opencode-go/0.1.0"}}})
 	routes := map[string]string(nil)
 	if err == nil {
 		routes, err = parseModels(resp.Body)

@@ -1,8 +1,9 @@
 # OpenCode Go provider for CLIProxyAPI
 
 A first-class OpenCode Go provider plugin for **CLIProxyAPI v8.0.48**, built
-against the published
-[`cliproxy-provider-kit v0.1.0`](https://github.com/TogetherWeOwn/cliproxy-provider-kit).
+against
+[`cliproxy-provider-kit`](https://github.com/TogetherWeOwn/cliproxy-provider-kit)
+at `f24cf1f` (v0.1.0 plus quota/discovery proxy support).
 It implements API-key auth, model registration/discovery, multi-protocol
 inference (including streaming), and read-only quota cards. **Live provider
 verification and staging acceptance remain pending.** No provider endpoints are
@@ -44,7 +45,8 @@ Console device OAuth is not the Go API-key flow. Login/poll operations return an
 API-key-only error; refresh preserves the key. IDs are stable
 `opencode-go:<first 12 hex SHA256 characters of api_key>` unless an explicit
 `id` is supplied. `prefix`, `proxy_url`, and the host's routing fields are
-preserved. Optional `workspace` is metadata only, never an HTTP path or scraping
+preserved. Model discovery and quota polls go through the auth's
+`proxy_url`, else the host's global `proxy-url`, like inference does. Optional `workspace` is metadata only, never an HTTP path or scraping
 input. No browser sessions or dashboard scraping are used.
 
 ## Models and protocols

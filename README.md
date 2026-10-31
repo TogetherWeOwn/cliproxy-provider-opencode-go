@@ -1,16 +1,18 @@
 # OpenCode Go provider (work in progress)
 
-**Not installable.** This repository currently contains only a port of the
-legacy quota parser, a cached quota polling adapter, and auth parsing. It does
-not yet contain an executor, model catalog, plugin entry point, migration tool,
-release packaging, or a host-compatibility test. Do not use it for a cutover.
+**Not ready for installation or cutover.** An experimental c-shared entry point
+registers only the auth parser, and a host-loader test checks that limited
+capability. It does not register an executor, model catalog, or quota provider.
+The repository also lacks a migration tool and release packaging. Do not use
+this artifact for inference or a cutover.
 
 The quota parser is adapted from
 [TogetherWeOwn/cpa-plugin-subscription-pool](https://github.com/TogetherWeOwn/cpa-plugin-subscription-pool)
 commit `ad3cb9ecd0130b1b7a0ffb122d0d4685bd8e659b`, MIT licensed. The
 current endpoint and response shape have not been verified with a real account.
-The adapter tries the legacy usage path only when the current path returns 404
-or 410. Tests use local mocks; they do not call the provider.
+The unregistered adapter tries the legacy usage path only when the current path
+returns 404 or 410; it must not be enabled based on mock fixtures alone. Tests
+use local mocks; they do not call the provider.
 
 An eventual auth file has the following shape; values are placeholders only:
 

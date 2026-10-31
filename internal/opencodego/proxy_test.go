@@ -58,3 +58,21 @@ func TestQuotaPollUsesAuthProxy(t *testing.T) {
 		t.Fatalf("proxy saw %v", got)
 	}
 }
+
+func TestExecutorDiscoveryUsesHostProxyFromAuthParse(t *testing.T) {
+	hostProxy, seen := newProxyRecorder(t, `{"data":[{"id":"glm-5.3","protocol":"openai"}]}`)
+	c := newCatalog("http://opencode.invalid", nil)
+	defer c.client.CloseIdleConnections()
+	auth := proxyAuth{newAuth(), c}
+	parsed, err := auth.ParseAuth(context.Background(), pluginapi.AuthParseRequest{RawJSON: []byte(`{"type":"opencode-go","api_key":"key"}`), Host: pluginapi.HostConfigSummary{ProxyURL: hostProxy.URL}})
+	if err != nil || !parsed.Handled {
+		t.Fatal(parsed, err)
+	}
+	// No ModelsForAuth call precedes this executor-path lookup.
+	if _, err := c.resolve(context.Background(), "glm-5.3", parsed.Auth.StorageJSON, parsed.Auth.Metadata); err != nil {
+		t.Fatal(err)
+	}
+	if got := seen(); len(got) != 1 || got[0] != "http://opencode.invalid/inference/go/v1/models" {
+		t.Fatalf("host proxy saw %v", got)
+	}
+}

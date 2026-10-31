@@ -50,9 +50,9 @@ type catalog struct {
 	client *kit.QuotaHTTPClient
 	mu     sync.Mutex
 	cache  map[[32]byte]catalogEntry
-	// hostProxy is the host's global proxy-url from the latest ModelsForAuth.
-	// Executor requests do not carry host config, so discovery on that path
-	// reuses it as the fallback when the auth has no proxy_url.
+	// hostProxy is the host's global proxy-url from the latest auth parse,
+	// refresh or ModelsForAuth. Executor requests do not carry host config, so
+	// discovery on that path reuses it when the auth has no proxy_url.
 	hostProxy atomic.Pointer[string]
 }
 
@@ -77,9 +77,9 @@ func (c *catalog) RegisterModels(context.Context, pluginapi.ModelRegistrationReq
 func (c *catalog) StaticModels(context.Context, pluginapi.StaticModelRequest) (pluginapi.ModelResponse, error) {
 	return pluginapi.ModelResponse{Provider: provider, Models: modelList(staticRoutes())}, nil
 }
+func (c *catalog) setHostProxy(proxyURL string) { c.hostProxy.Store(&proxyURL) }
 func (c *catalog) ModelsForAuth(ctx context.Context, r pluginapi.AuthModelRequest) (pluginapi.ModelResponse, error) {
-	hostProxy := r.Host.ProxyURL
-	c.hostProxy.Store(&hostProxy)
+	c.setHostProxy(r.Host.ProxyURL)
 	routes, err := c.load(ctx, r.StorageJSON, r.Metadata)
 	if err != nil {
 		return pluginapi.ModelResponse{}, err

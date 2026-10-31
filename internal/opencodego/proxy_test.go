@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -74,5 +75,16 @@ func TestExecutorDiscoveryUsesHostProxyFromAuthParse(t *testing.T) {
 	}
 	if got := seen(); len(got) != 1 || got[0] != "http://opencode.invalid/inference/go/v1/models" {
 		t.Fatalf("host proxy saw %v", got)
+	}
+}
+
+func TestDiscoveryInvalidProxyIsNotHiddenByStaticRoutes(t *testing.T) {
+	c := newCatalog("http://opencode.invalid", nil)
+	defer c.client.CloseIdleConnections()
+	r := pluginapi.AuthModelRequest{AuthID: "a", StorageJSON: []byte(`{"api_key":"key"}`), Metadata: map[string]any{"proxy_url": "ftp://proxy.invalid"}}
+	for range 2 { // the error must not be replaced by a cached fallback
+		if _, err := c.ModelsForAuth(context.Background(), r); err == nil || !strings.Contains(err.Error(), "proxy") {
+			t.Fatalf("got %v", err)
+		}
 	}
 }

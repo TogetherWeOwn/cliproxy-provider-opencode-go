@@ -3,7 +3,7 @@
 A first-class OpenCode Go provider plugin for **CLIProxyAPI v8.0.48**, built
 against
 [`cliproxy-provider-kit`](https://github.com/TogetherWeOwn/cliproxy-provider-kit)
-at `f24cf1f` (v0.1.0 plus quota/discovery proxy support).
+at `de8b318` (v0.1.0 plus quota/discovery proxy support).
 It implements API-key auth, model registration/discovery, multi-protocol
 inference (including streaming), and read-only quota cards. **Live provider
 verification and staging acceptance remain pending.** No provider endpoints are

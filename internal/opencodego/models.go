@@ -80,14 +80,18 @@ func (c *catalog) StaticModels(context.Context, pluginapi.StaticModelRequest) (p
 func (c *catalog) setHostProxy(proxyURL string) { c.hostProxy.Store(&proxyURL) }
 func (c *catalog) ModelsForAuth(ctx context.Context, r pluginapi.AuthModelRequest) (pluginapi.ModelResponse, error) {
 	c.setHostProxy(r.Host.ProxyURL)
-	routes, err := c.load(ctx, r.StorageJSON, r.Metadata)
+	routes, err := c.load(ctx, r.StorageJSON, r.Metadata, r.Host.ProxyURL)
 	if err != nil {
 		return pluginapi.ModelResponse{}, err
 	}
 	return pluginapi.ModelResponse{Provider: provider, Models: modelList(routes)}, nil
 }
 func (c *catalog) resolve(ctx context.Context, id string, storage []byte, metadata map[string]any) (string, error) {
-	routes, err := c.load(ctx, storage, metadata)
+	hostProxy := ""
+	if p := c.hostProxy.Load(); p != nil {
+		hostProxy = *p
+	}
+	routes, err := c.load(ctx, storage, metadata, hostProxy)
 	if err != nil {
 		return "", err
 	}
@@ -96,7 +100,7 @@ func (c *catalog) resolve(ctx context.Context, id string, storage []byte, metada
 	}
 	return "", &pluginabi.Error{Code: "invalid_model", Message: "model absent from OpenCode Go catalog or has no known protocol", HTTPStatus: 400}
 }
-func (c *catalog) load(ctx context.Context, storage []byte, metadata map[string]any) (map[string]string, error) {
+func (c *catalog) load(ctx context.Context, storage []byte, metadata map[string]any, hostProxy string) (map[string]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -110,10 +114,6 @@ func (c *catalog) load(ctx context.Context, storage []byte, metadata map[string]
 	c.mu.Unlock()
 	if ok && time.Now().Before(entry.expires) {
 		return entry.routes, nil
-	}
-	hostProxy := ""
-	if p := c.hostProxy.Load(); p != nil {
-		hostProxy = *p
 	}
 	// Discovery sends the key directly, so route it like host requests.
 	proxyCtx := kit.WithProxyURL(ctx, kit.AuthProxyURL(storage, metadata, hostProxy))
@@ -129,7 +129,9 @@ func (c *catalog) load(ctx context.Context, storage []byte, metadata map[string]
 			return nil, ctx.Err()
 		}
 		var pe *pluginabi.Error
-		if errors.As(err, &pe) && (pe.HTTPStatus == 401 || pe.HTTPStatus == 403) {
+		// A bad proxy setting is a configuration error, not an outage: surface
+		// it rather than hiding it behind cached static routes.
+		if errors.As(err, &pe) && (pe.HTTPStatus == 401 || pe.HTTPStatus == 403 || pe.Code == "invalid_proxy") {
 			return nil, err
 		}
 		routes = staticRoutes()

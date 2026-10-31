@@ -17,7 +17,7 @@ func NewRuntime(host kit.Caller) (*kit.Runtime, error) {
 		Metadata:  pluginapi.Metadata{Name: provider, Version: "0.1.0", Author: "TogetherWeOwn", GitHubRepository: "https://github.com/TogetherWeOwn/cliproxy-provider-opencode-go"},
 		Configure: configureBase,
 		Capabilities: pluginapi.Capabilities{
-			AuthProvider: newAuth(), ModelProvider: c, ModelRegistrar: c, Executor: newExecutor(c), QuotaProvider: q,
+			AuthProvider: proxyAuth{newAuth(), c}, ModelProvider: c, ModelRegistrar: c, Executor: newExecutor(c), QuotaProvider: q,
 			ExecutorModelScope:    pluginapi.ExecutorModelScopeBoth,
 			ExecutorInputFormats:  []string{"openai", "openai-response", "claude", "gemini"},
 			ExecutorOutputFormats: []string{"openai", "openai-response", "claude", "gemini"},

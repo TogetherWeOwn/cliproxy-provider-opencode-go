@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	kit "github.com/TogetherWeOwn/cliproxy-provider-kit"
@@ -49,6 +50,10 @@ type catalog struct {
 	client *kit.QuotaHTTPClient
 	mu     sync.Mutex
 	cache  map[[32]byte]catalogEntry
+	// hostProxy is the host's global proxy-url from the latest auth parse,
+	// refresh or ModelsForAuth. Executor requests do not carry host config, so
+	// discovery on that path reuses it when the auth has no proxy_url.
+	hostProxy atomic.Pointer[string]
 }
 
 func newCatalog(base string, transport http.RoundTripper) *catalog {
@@ -72,15 +77,21 @@ func (c *catalog) RegisterModels(context.Context, pluginapi.ModelRegistrationReq
 func (c *catalog) StaticModels(context.Context, pluginapi.StaticModelRequest) (pluginapi.ModelResponse, error) {
 	return pluginapi.ModelResponse{Provider: provider, Models: modelList(staticRoutes())}, nil
 }
+func (c *catalog) setHostProxy(proxyURL string) { c.hostProxy.Store(&proxyURL) }
 func (c *catalog) ModelsForAuth(ctx context.Context, r pluginapi.AuthModelRequest) (pluginapi.ModelResponse, error) {
-	routes, err := c.load(ctx, r.StorageJSON, r.Metadata)
+	c.setHostProxy(r.Host.ProxyURL)
+	routes, err := c.load(ctx, r.StorageJSON, r.Metadata, r.Host.ProxyURL)
 	if err != nil {
 		return pluginapi.ModelResponse{}, err
 	}
 	return pluginapi.ModelResponse{Provider: provider, Models: modelList(routes)}, nil
 }
 func (c *catalog) resolve(ctx context.Context, id string, storage []byte, metadata map[string]any) (string, error) {
-	routes, err := c.load(ctx, storage, metadata)
+	hostProxy := ""
+	if p := c.hostProxy.Load(); p != nil {
+		hostProxy = *p
+	}
+	routes, err := c.load(ctx, storage, metadata, hostProxy)
 	if err != nil {
 		return "", err
 	}
@@ -89,7 +100,7 @@ func (c *catalog) resolve(ctx context.Context, id string, storage []byte, metada
 	}
 	return "", &pluginabi.Error{Code: "invalid_model", Message: "model absent from OpenCode Go catalog or has no known protocol", HTTPStatus: 400}
 }
-func (c *catalog) load(ctx context.Context, storage []byte, metadata map[string]any) (map[string]string, error) {
+func (c *catalog) load(ctx context.Context, storage []byte, metadata map[string]any, hostProxy string) (map[string]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -104,7 +115,9 @@ func (c *catalog) load(ctx context.Context, storage []byte, metadata map[string]
 	if ok && time.Now().Before(entry.expires) {
 		return entry.routes, nil
 	}
-	resp, err := c.client.Do(ctx, pluginapi.HTTPRequest{URL: c.base() + "/inference/go/v1/models", Headers: http.Header{"Authorization": {"Bearer " + key}, "Accept": {"application/json"}, "User-Agent": {"cliproxy-provider-opencode-go/0.1.0"}}})
+	// Discovery sends the key directly, so route it like host requests.
+	proxyCtx := kit.WithProxyURL(ctx, kit.AuthProxyURL(storage, metadata, hostProxy))
+	resp, err := c.client.Do(proxyCtx, pluginapi.HTTPRequest{URL: c.base() + "/inference/go/v1/models", Headers: http.Header{"Authorization": {"Bearer " + key}, "Accept": {"application/json"}, "User-Agent": {"cliproxy-provider-opencode-go/0.1.0"}}})
 	routes := map[string]string(nil)
 	if err == nil {
 		routes, err = parseModels(resp.Body)
@@ -116,7 +129,9 @@ func (c *catalog) load(ctx context.Context, storage []byte, metadata map[string]
 			return nil, ctx.Err()
 		}
 		var pe *pluginabi.Error
-		if errors.As(err, &pe) && (pe.HTTPStatus == 401 || pe.HTTPStatus == 403) {
+		// A bad proxy setting is a configuration error, not an outage: surface
+		// it rather than hiding it behind cached static routes.
+		if errors.As(err, &pe) && (pe.HTTPStatus == 401 || pe.HTTPStatus == 403 || pe.Code == "invalid_proxy") {
 			return nil, err
 		}
 		routes = staticRoutes()

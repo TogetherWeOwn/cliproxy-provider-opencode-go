@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -177,7 +178,7 @@ func TestValidateUsageEndpointLocksToProductionHostInNonTestMode(t *testing.T) {
 		{name: "wrong path", invalid: "https://opencode.ai/other/path"},
 		{name: "http scheme", invalid: "http://opencode.ai/zen/go/v1/usage"},
 		{name: "with query", invalid: "https://opencode.ai/zen/go/v1/usage?x=1"},
-		{name: "with userinfo", invalid: "https://user@opencode.ai/zen/go/v1/usage"},
+		{name: "with userinfo", invalid: (&url.URL{Scheme: "https", Host: "opencode.ai", Path: "/zen/go/v1/usage", User: url.User("example-user")}).String()},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

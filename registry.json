@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "plugins": [
+    {
+      "id": "opencode-go",
+      "name": "OpenCode Go",
+      "description": "API-key authentication, prefixed multi-protocol models, native host routing and display-only quota cards",
+      "author": "TogetherWeOwn",
+      "repository": "https://github.com/TogetherWeOwn/cliproxy-provider-opencode-go",
+      "version": "0.1.0",
+      "license": "MIT",
+      "tags": ["provider", "opencode-go", "quota"],
+      "install": {"type": "github-release"}
+    }
+  ]
+}

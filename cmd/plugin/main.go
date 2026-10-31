@@ -1,4 +1,4 @@
-// Package main provides an experimental auth-only ABI entry point.
+// Package main provides the OpenCode Go C-ABI provider entry point.
 package main
 
 import (

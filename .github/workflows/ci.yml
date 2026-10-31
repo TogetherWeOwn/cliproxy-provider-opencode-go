@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CGO_ENABLED: '1'
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+          cache-dependency-path: |
+            go.sum
+            integration/hostcompat/go.sum
+      - name: Check formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(gofmt -l $(git ls-files '*.go'))"
+      - name: Verify pinned modules
+        run: |
+          go mod verify
+          go -C integration/hostcompat mod verify
+          ! grep -q '^replace ' go.mod
+      - name: Vet
+        run: |
+          go vet ./...
+          go -C integration/hostcompat vet ./...
+      - name: Unit race tests and release archive contract
+        run: go test -race -count=1 ./...
+      - name: Build production C shared library
+        shell: bash
+        run: |
+          set -euo pipefail
+          go build -trimpath -buildmode=c-shared -o "${RUNNER_TEMP}/opencode-go.so" ./cmd/plugin
+          nm -D "${RUNNER_TEMP}/opencode-go.so" > "${RUNNER_TEMP}/symbols.txt"
+          grep -q ' T cliproxy_plugin_init$' "${RUNNER_TEMP}/symbols.txt"
+      - name: Real v8.0.48 host loader and registry schema
+        run: go -C integration/hostcompat test -race -count=1 -v ./...
+      - name: Install secret scanner
+        run: go install github.com/zricethezav/gitleaks/v8@v8.24.3
+      - name: Secret and public-source scan
+        run: |
+          gitleaks dir --no-banner --redact --exit-code 1 .
+          python3 -I scripts/check-public-files.py .
+      - name: No session scraping in production code
+        shell: bash
+        run: |
+          set -euo pipefail
+          if find internal cmd -name '*.go' ! -name '*_test.go' -print0 | xargs -0 grep -qEi '(cookie|/workspace/|text/html|data-slot)'; then
+            echo 'Unexpected session-scraping code path.'
+            exit 1
+          fi

@@ -15,7 +15,10 @@ import (
 // newQuota uses the original subscription-pool parser; unlike the legacy
 // fetcher, the kit owns the bounded, non-redirecting transport.
 func newQuota(base string, transport http.RoundTripper) *kit.CachedQuota {
-	client := kit.NewQuotaHTTPClient(transport)
+	return newQuotaWithClient(func() string { return base }, kit.NewQuotaHTTPClient(transport))
+}
+
+func newQuotaWithClient(base func() string, client *kit.QuotaHTTPClient) *kit.CachedQuota {
 	return kit.NewCachedQuota("opencode-go", "OpenCode Go", func(ctx context.Context, r pluginapi.QuotaFetchRequest) (pluginapi.QuotaFetchResponse, error) {
 		fields, err := kit.AuthFields(r.StorageJSON, r.Metadata)
 		if err != nil {
@@ -29,10 +32,10 @@ func newQuota(base string, transport http.RoundTripper) *kit.CachedQuota {
 			}
 		}
 		headers := http.Header{"Authorization": []string{"Bearer " + strings.TrimSpace(key)}, "Accept": []string{"application/json"}}
-		response, err := client.Do(ctx, pluginapi.HTTPRequest{URL: base + "/inference/go/v1/usage", Headers: headers})
+		response, err := client.Do(ctx, pluginapi.HTTPRequest{URL: base() + "/inference/go/v1/usage", Headers: headers})
 		var pe *pluginabi.Error
 		if errors.As(err, &pe) && (pe.HTTPStatus == 404 || pe.HTTPStatus == 410) {
-			response, err = client.Do(ctx, pluginapi.HTTPRequest{URL: base + "/zen/go/v1/usage", Headers: headers})
+			response, err = client.Do(ctx, pluginapi.HTTPRequest{URL: base() + "/zen/go/v1/usage", Headers: headers})
 		}
 		if err != nil {
 			return pluginapi.QuotaFetchResponse{}, err

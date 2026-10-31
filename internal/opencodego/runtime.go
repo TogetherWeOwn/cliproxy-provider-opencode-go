@@ -1,19 +1,27 @@
 package opencodego
 
 import (
+	"context"
+
 	kit "github.com/TogetherWeOwn/cliproxy-provider-kit"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
-// NewRuntime registers only the auth parser. This experimental build must not
-// advertise quota until the current endpoint's contract has been verified, or
-// inference capabilities until protocol translation has been implemented.
+// NewRuntime owns per-instance discovery and display-only quota caches. Account
+// selection and error-driven cooldown remain entirely with the native host.
 func NewRuntime(host kit.Caller) (*kit.Runtime, error) {
+	c := newCatalog(upstreamBase, nil)
+	c.base = selectedBase
+	q := newQuotaWithClient(selectedBase, c.client)
 	return kit.New(kit.Definition{
-		Metadata: pluginapi.Metadata{
-			Name: "opencode-go", Version: "0.0.0-dev", Author: "TogetherWeOwn",
-			GitHubRepository: "https://github.com/TogetherWeOwn/cliproxy-provider-opencode-go",
+		Metadata:  pluginapi.Metadata{Name: provider, Version: "0.1.0", Author: "TogetherWeOwn", GitHubRepository: "https://github.com/TogetherWeOwn/cliproxy-provider-opencode-go"},
+		Configure: configureBase,
+		Capabilities: pluginapi.Capabilities{
+			AuthProvider: newAuth(), ModelProvider: c, ModelRegistrar: c, Executor: newExecutor(c), QuotaProvider: q,
+			ExecutorModelScope:    pluginapi.ExecutorModelScopeBoth,
+			ExecutorInputFormats:  []string{"openai", "openai-response", "claude", "gemini"},
+			ExecutorOutputFormats: []string{"openai", "openai-response", "claude", "gemini"},
 		},
-		Capabilities: pluginapi.Capabilities{AuthProvider: newAuth()},
+		OnShutdown: func(context.Context) error { c.client.CloseIdleConnections(); return nil },
 	}, host)
 }

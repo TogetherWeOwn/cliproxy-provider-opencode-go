@@ -1,0 +1,6 @@
+/dist/
+*.so
+*.h
+*.dylib
+*.zip
+__pycache__/

@@ -105,8 +105,10 @@ Quota fetches `GET /inference/go/v1/usage`; only **404 or 410** permits a retry 
 legacy `/zen/go/v1/usage`. It uses the separate quota key when configured, has a
 15-second timeout, refuses redirects and caps responses at 1 MiB. Successful
 observations are cached for 60 seconds per auth/credential. The source-confirmed
-legacy `usage.rolling`, `weekly`, and `monthly` windows map to `5h`, `weekly`, and
-`monthly` buckets. Remaining fraction is `(100-percent)/100`; a `rate-limited`
+legacy `usage.rolling`, `weekly`, and `monthly` windows map to `5-hour limit`,
+`Weekly limit`, and `Monthly limit` buckets, with no summary chips — the
+used-percent metrics repeated the bars. Remaining fraction is `(100-percent)/100`;
+a `rate-limited`
 status forces zero remaining. Invalid or missing windows fail closed. Reset
 times come from the server; no plan tier or dollar balances are fabricated.
 

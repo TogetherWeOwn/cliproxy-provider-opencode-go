@@ -172,7 +172,14 @@ func TestExecutorRoutesEveryProtocolAndTranslatesOpenAIClients(t *testing.T) {
 						}
 						out.Write(chunk.Payload)
 					}
-					if !strings.Contains(out.String(), "[DONE]") {
+					if tt.format == "openai" {
+						// Same-protocol relay: kit-framed chunks go out
+						// verbatim with no terminator; the host handler
+						// wraps each chunk and appends its own [DONE].
+						if strings.Contains(out.String(), "[DONE]") {
+							t.Error("same-protocol relay must not emit a terminator")
+						}
+					} else if !strings.Contains(out.String(), "[DONE]") {
 						t.Error("translated Chat stream missing terminal marker")
 					}
 					if !strings.Contains(out.String(), "hello") || !strings.Contains(out.String(), "data:") || !strings.Contains(out.String(), `"choices"`) {
@@ -330,6 +337,278 @@ func clientRequest(format, id string, stream bool) pluginapi.ExecutorRequest {
 	}
 	raw, _ := json.Marshal(body)
 	return pluginapi.ExecutorRequest{Model: model, SourceFormat: format, Format: format, Stream: stream, Payload: raw, StorageJSON: []byte(`{"api_key":"example-key"}`)}
+}
+
+// The kit shapes same-protocol OpenAI chunks for the host — bare JSON on
+// chat/completions routes (the handler writes each chunk as "data: %s" and
+// appends its own [DONE]), "data:"-framed elsewhere — and drops the upstream
+// [DONE]. The relay forwards those chunks verbatim: re-framing would
+// double-wrap ("data: data: …") and a re-emitted [DONE] would precede the
+// handler's own terminator. Both kit shapes are covered; the bare shape is
+// run through a simulated host wrap to prove the client sees parseable
+// frames.
+func TestSameProtocolRelayForwardsKitChunksVerbatim(t *testing.T) {
+	upstream := "data: {\"id\":\"chat-example\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chat-example\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+	for name, tc := range map[string]struct {
+		metadata   map[string]any
+		wantFramed bool
+	}{
+		"framed": {nil, true},
+		"bare":   {map[string]any{"request_path": "/v1/chat/completions"}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == "GET" {
+					w.WriteHeader(503)
+					return
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				io.WriteString(w, upstream)
+			}))
+			defer s.Close()
+			ex := newExecutor(newCatalog(s.URL, nil))
+			req := clientRequest("openai", "glm-5.3", true)
+			req.HTTPClient = testHTTP{s.Client()}
+			req.Metadata = tc.metadata
+			resp, err := ex.ExecuteStream(context.Background(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payloads [][]byte
+			for c := range resp.Chunks {
+				if c.Err != nil {
+					t.Fatal(c.Err)
+				}
+				payloads = append(payloads, c.Payload)
+			}
+			if len(payloads) != 2 {
+				t.Fatalf("want 2 relayed events, got %d: %q", len(payloads), payloads)
+			}
+			for _, p := range payloads {
+				if bytes.Contains(p, []byte("[DONE]")) {
+					t.Fatalf("relay must not re-emit the dropped terminator: %q", p)
+				}
+				framed := bytes.HasPrefix(bytes.TrimSpace(p), []byte("data:"))
+				if framed != tc.wantFramed {
+					t.Fatalf("wantFramed=%v, payload=%q", tc.wantFramed, p)
+				}
+			}
+			if tc.wantFramed {
+				// Translator input: exactly one data event with a JSON body.
+				for _, p := range payloads {
+					trimmed := bytes.TrimSpace(bytes.TrimPrefix(bytes.TrimSpace(p), []byte("data:")))
+					if !json.Valid(trimmed) {
+						t.Fatalf("framed chunk is not one JSON event: %q", p)
+					}
+				}
+				return
+			}
+			// Chat route: simulate the host handler wrap plus its terminator.
+			var client bytes.Buffer
+			for _, p := range payloads {
+				client.WriteString("data: ")
+				client.Write(bytes.TrimSpace(p))
+				client.WriteString("\n\n")
+			}
+			client.WriteString("data: [DONE]\n\n")
+			frames := strings.Split(strings.TrimSpace(client.String()), "\n\n")
+			if len(frames) != 3 {
+				t.Fatalf("want 3 client frames, got %d: %q", len(frames), client.String())
+			}
+			for _, f := range frames {
+				data := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(f), "data:"))
+				if data != "[DONE]" && !json.Valid([]byte(data)) {
+					t.Fatalf("client frame is not parseable: %q", f)
+				}
+			}
+			if !strings.Contains(frames[0], `"content":"hello"`) || frames[2] != "data: [DONE]" {
+				t.Fatalf("content/terminal frames wrong: %q", client.String())
+			}
+		})
+	}
+}
+
+// The kit drops the upstream [DONE], so per-choice finish reasons are the
+// only completion signal: a close before every choice finishes is a
+// truncation (stream_truncated), never a clean end. Neither outcome carries
+// a terminator; the host handler appends its own.
+func TestSameProtocolRelayRejectsTruncation(t *testing.T) {
+	complete := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
+	cut := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n"
+	for _, tc := range []struct {
+		name     string
+		upstream string
+		wantErr  bool
+	}{
+		{"cut mid-choice", cut, true},
+		{"cut after finish", complete, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == "GET" {
+					w.WriteHeader(503)
+					return
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				io.WriteString(w, tc.upstream)
+			}))
+			defer s.Close()
+			ex := newExecutor(newCatalog(s.URL, nil))
+			req := clientRequest("openai", "glm-5.3", true)
+			req.HTTPClient = testHTTP{s.Client()}
+			resp, err := ex.ExecuteStream(context.Background(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out strings.Builder
+			failed := false
+			for c := range resp.Chunks {
+				if c.Err != nil {
+					failed = true
+					continue
+				}
+				out.Write(c.Payload)
+			}
+			if failed != tc.wantErr {
+				t.Fatalf("truncation error = %v, want %v (output %q)", failed, tc.wantErr, out.String())
+			}
+			if strings.Contains(out.String(), "[DONE]") {
+				t.Fatalf("relay must never emit a terminator, truncated=%v: %q", tc.wantErr, out.String())
+			}
+			if !strings.Contains(out.String(), `"content":"hi"`) {
+				t.Fatalf("content lost: %q", out.String())
+			}
+		})
+	}
+}
+
+// The relay's framed predicate must match the kit's Passthrough decision on
+// the same request: an empty request Format keeps the OpenAI assumption, and
+// a missing upstream Content-Type keeps the SSE assumption. A mismatch in
+// either direction strands events (raw parsing of framed chunks, or framing
+// of non-SSE bytes).
+func TestFramedPredicateMirrorsKit(t *testing.T) {
+	for _, tc := range []struct {
+		format, contentType string
+		want                bool
+	}{
+		{"openai", "text/event-stream", true},
+		{"openai", "text/event-stream; charset=utf-8", true},
+		{"openai", "", true},
+		{"openai", "application/json", false},
+		{"", "text/event-stream", true},
+		{"claude", "text/event-stream", false},
+		{"gemini", "", false},
+		{"openai-response", "text/event-stream", false},
+	} {
+		h := http.Header{}
+		if tc.contentType != "" {
+			h.Set("Content-Type", tc.contentType)
+		}
+		if got := openAIOutputFormat(tc.format) && sseStream(h); got != tc.want {
+			t.Errorf("format=%q contentType=%q: got %v, want %v", tc.format, tc.contentType, got, tc.want)
+		}
+	}
+}
+
+// scriptedStreamClient answers discovery with a 503 (static fallback, as in
+// the httptest servers above) and serves one scripted stream, so transport
+// error chunks can be injected deterministically.
+type scriptedStreamClient struct {
+	chunks []pluginapi.HTTPStreamChunk
+}
+
+func (scriptedStreamClient) Do(context.Context, pluginapi.HTTPRequest) (pluginapi.HTTPResponse, error) {
+	return pluginapi.HTTPResponse{StatusCode: http.StatusServiceUnavailable}, nil
+}
+
+func (c scriptedStreamClient) DoStream(ctx context.Context, _ pluginapi.HTTPRequest) (pluginapi.HTTPStreamResponse, error) {
+	out := make(chan pluginapi.HTTPStreamChunk)
+	go func() {
+		defer close(out)
+		for _, chunk := range c.chunks {
+			select {
+			case out <- chunk:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return pluginapi.HTTPStreamResponse{StatusCode: http.StatusOK, Headers: http.Header{"Content-Type": {"text/event-stream"}}, Chunks: out}, nil
+}
+
+// Regression (Devin Review): a framed error chunk carries no payload, so it
+// must be forwarded as (nil, Err). Framing a nil payload would emit a bogus
+// empty "data:" event that fails client JSON parsing.
+func TestSameProtocolRelayForwardsErrorChunksWithoutPayload(t *testing.T) {
+	boom := errors.New("upstream transport reset")
+	ex := newExecutor(newCatalog("http://127.0.0.1:0", nil))
+	req := clientRequest("openai", "glm-5.3", true)
+	req.Metadata = map[string]any{"request_path": "/v1/chat/completions"}
+	req.HTTPClient = scriptedStreamClient{chunks: []pluginapi.HTTPStreamChunk{
+		{Payload: []byte("data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")},
+		{Err: boom},
+	}}
+	resp, err := ex.ExecuteStream(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payloads [][]byte
+	var errs []error
+	for c := range resp.Chunks {
+		if c.Err != nil {
+			errs = append(errs, c.Err)
+			continue
+		}
+		payloads = append(payloads, c.Payload)
+	}
+	if len(payloads) != 1 || len(errs) != 1 || !errors.Is(errs[0], boom) {
+		t.Fatalf("want 1 payload + the upstream error, got %d payloads %v", len(payloads), errs)
+	}
+	for _, p := range payloads {
+		data := bytes.TrimSpace(bytes.TrimPrefix(bytes.TrimSpace(p), []byte("data:")))
+		if len(data) == 0 || !json.Valid(data) {
+			t.Fatalf("relay emitted an empty or invalid event: %q", p)
+		}
+	}
+}
+
+// Regression (Devin Review): an empty request Format makes the kit frame the
+// stream as OpenAI, but the resolved protocol can be non-OpenAI with its own
+// terminal events. A healthy Claude stream ending in message_stop must close
+// cleanly — per-choice finish tracking must not reject it as truncated.
+func TestSameProtocolRelayLeavesNonOpenAICompletionAlone(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.WriteHeader(503)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, wireResponse("claude", true))
+	}))
+	defer s.Close()
+	ex := newExecutor(newCatalog(s.URL, nil))
+	req := clientRequest("claude", "minimax-m3", true)
+	req.Format = "" // empty output: kit frames as OpenAI, protocol resolves to Claude
+	req.Metadata = nil
+	req.HTTPClient = testHTTP{s.Client()}
+	resp, err := ex.ExecuteStream(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	for c := range resp.Chunks {
+		if c.Err != nil {
+			t.Fatalf("healthy non-OpenAI stream rejected: %v", c.Err)
+		}
+		out.Write(c.Payload)
+	}
+	if !strings.Contains(out.String(), "message_stop") {
+		t.Fatalf("terminal event lost: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "hello") {
+		t.Fatalf("content lost: %q", out.String())
+	}
 }
 
 func TestTranslatedStreamRejectsTruncationAndOversizedEvents(t *testing.T) {

@@ -263,6 +263,16 @@ func (e *executor) ExecuteStream(ctx context.Context, r pluginapi.ExecutorReques
 		cancel()
 		return pluginapi.ExecutorStreamResponse{}, err
 	}
+	// The kit re-frames SSE responses to one event per chunk (and drops the
+	// upstream [DONE] marker) whenever the requested output format is OpenAI.
+	// Framed chunks carry no line terminators, so they must be consumed as
+	// whole events, not re-split on byte boundaries.
+	//
+	// The predicate mirrors the kit's Passthrough decision
+	// (openAIOutputFormat + isSSEStream) on this same request object: the
+	// resolved output can differ (an empty request Format falls back to the
+	// input format) and a missing upstream Content-Type still means SSE.
+	framed := openAIOutputFormat(r.Format) && sseStream(resp.Headers)
 	out := make(chan pluginapi.ExecutorStreamChunk)
 	go func() {
 		defer close(out)
@@ -276,15 +286,45 @@ func (e *executor) ExecuteStream(ctx context.Context, r pluginapi.ExecutorReques
 			}
 		}
 		if p.native == p.output {
+			// In framed mode the kit delivers one complete event per chunk,
+			// already shaped for the host: bare JSON on OpenAI
+			// chat/completions routes (the handler writes each chunk as
+			// "data: %s" and appends its own [DONE]), "data:"-framed
+			// elsewhere. Forward verbatim: re-framing here would
+			// double-wrap ("data: data: …") and a re-emitted [DONE]
+			// would precede the handler's own terminator. Finish reasons
+			// are still tracked because the kit drops the upstream
+			// [DONE]: a close before every choice finishes is a
+			// truncation, not a clean end, mirroring the translated
+			// path's stream_truncated. Tracking is OpenAI-specific: the
+			// kit also frames empty-Format streams as OpenAI, but a
+			// resolved non-OpenAI protocol carries its own terminal
+			// events, not per-choice finish reasons. Tracking those
+			// chunks would reject healthy streams, so they keep the
+			// verbatim passthrough with no truncation verdict. Error
+			// chunks carry no payload; framing a nil payload would emit
+			// a bogus empty data event.
+			trackCompletion := framed && p.output == tr.FormatOpenAI
+			completion := newOpenAICompletion()
 			for {
 				select {
 				case <-streamCtx.Done():
 					return
 				case chunk, ok := <-resp.Chunks:
 					if !ok {
+						if trackCompletion && !completion.done() {
+							send(nil, truncatedStream())
+						}
 						return
 					}
-					if !send(chunk.Payload, chunk.Err) || chunk.Err != nil {
+					if chunk.Err != nil {
+						send(nil, chunk.Err)
+						return
+					}
+					if trackCompletion {
+						completion.observe(chunk.Payload)
+					}
+					if !send(chunk.Payload, nil) {
 						return
 					}
 				}
@@ -292,10 +332,26 @@ func (e *executor) ExecuteStream(ctx context.Context, r pluginapi.ExecutorReques
 		}
 		// Host HTTP chunks have arbitrary byte boundaries. Feed complete SSE data
 		// events into the SDK, maintaining one translator state per request.
+		// In framed mode each kit chunk is already one complete event.
 		var pending, data []byte
 		terminal, doneSent := false, false
 		var param any
-		emit := func() bool {
+		var emit func() bool
+		framedEvent := func(payload []byte) bool {
+			event := bytes.TrimSpace(payload)
+			if len(event) == 0 || event[0] == ':' {
+				return true // keep-alive comment
+			}
+			if rest, ok := bytes.CutPrefix(event, []byte("data:")); ok {
+				event = bytes.TrimPrefix(rest, []byte(" "))
+			}
+			if len(event) > maxUsageResponse {
+				return false
+			}
+			data = event
+			return emit()
+		}
+		emit = func() bool {
 			if len(data) == 0 {
 				return true
 			}
@@ -342,7 +398,7 @@ func (e *executor) ExecuteStream(ctx context.Context, r pluginapi.ExecutorReques
 						return
 					}
 					if !terminal {
-						send(nil, &pluginabi.Error{Code: "stream_truncated", Message: "upstream stream ended before its terminal event", HTTPStatus: 502, Retryable: true})
+						send(nil, truncatedStream())
 						return
 					}
 					if p.output == tr.FormatOpenAI && !doneSent {
@@ -353,6 +409,13 @@ func (e *executor) ExecuteStream(ctx context.Context, r pluginapi.ExecutorReques
 				if chunk.Err != nil {
 					send(nil, chunk.Err)
 					return
+				}
+				if framed {
+					if !framedEvent(chunk.Payload) {
+						send(nil, invalidStream())
+						return
+					}
+					continue
 				}
 				pending = append(pending, chunk.Payload...)
 				for {
@@ -377,6 +440,20 @@ func (e *executor) ExecuteStream(ctx context.Context, r pluginapi.ExecutorReques
 }
 func invalidStream() *pluginabi.Error {
 	return &pluginabi.Error{Code: "invalid_stream", Message: "upstream SSE event exceeds maximum size", HTTPStatus: 502}
+}
+func sseStream(h http.Header) bool {
+	ct := h.Get("Content-Type")
+	if ct == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(ct), "text/event-stream")
+}
+
+// openAIOutputFormat mirrors the kit's Passthrough framing predicate: the
+// host sets Format to the plugin's own declared output format, and an empty
+// format keeps the historical OpenAI assumption for direct callers.
+func openAIOutputFormat(format string) bool {
+	return format == "" || tr.Format(format) == tr.FormatOpenAI
 }
 func (*executor) CountTokens(ctx context.Context, r pluginapi.ExecutorRequest) (pluginapi.ExecutorResponse, error) {
 	return (kit.Passthrough{}).CountTokens(ctx, r)
@@ -429,6 +506,51 @@ func sessionHeader(r pluginapi.ExecutorRequest) string {
 }
 
 var _ pluginapi.ProviderExecutor = (*executor)(nil)
+
+func truncatedStream() *pluginabi.Error {
+	return &pluginabi.Error{Code: "stream_truncated", Message: "upstream stream ended before its terminal event", HTTPStatus: 502, Retryable: true}
+}
+
+// openAICompletion tracks per-choice finish reasons in framed same-protocol
+// relay. The kit drops [DONE] before these chunks reach the plugin, so the
+// finish reasons carried in the content events are the only completion
+// signal; like aggregateSSE it requires every observed choice to finish.
+type openAICompletion struct {
+	seen, finished map[int]bool
+}
+
+func newOpenAICompletion() *openAICompletion {
+	return &openAICompletion{seen: make(map[int]bool), finished: make(map[int]bool)}
+}
+
+func (c *openAICompletion) observe(payload []byte) {
+	event := bytes.TrimSpace(payload)
+	if rest, ok := bytes.CutPrefix(event, []byte("data:")); ok {
+		event = bytes.TrimPrefix(rest, []byte(" "))
+	}
+	var parsed struct {
+		Choices []struct {
+			Index  int     `json:"index"`
+			Finish *string `json:"finish_reason"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal(event, &parsed) != nil {
+		return
+	}
+	for _, ch := range parsed.Choices {
+		if ch.Index < 0 {
+			continue
+		}
+		c.seen[ch.Index] = true
+		if ch.Finish != nil && *ch.Finish != "" {
+			c.finished[ch.Index] = true
+		}
+	}
+}
+
+func (c *openAICompletion) done() bool {
+	return len(c.seen) > 0 && len(c.finished) == len(c.seen)
+}
 
 // SDK translators return either complete SSE events or JSON data. Normalize
 // only translated output; same-protocol upstream bytes are preserved verbatim.

@@ -3,7 +3,7 @@
 A first-class OpenCode Go provider plugin for **CLIProxyAPI v8.0.49**, built
 against
 [`cliproxy-provider-kit`](https://github.com/TogetherWeOwn/cliproxy-provider-kit)
-at `21069bf` (v0.1.0 plus quota/discovery proxy support and the v8.0.49
+at `88850ce` (v0.1.0 plus quota/discovery proxy support and the v8.0.49
 plugin ABI: RPC schema 10; hosts older than schema 10 are refused).
 It implements API-key auth, model registration/discovery, multi-protocol
 inference (including streaming), and read-only quota cards. **Live provider
@@ -52,10 +52,9 @@ input. No browser sessions or dashboard scraping are used.
 
 ## Models and protocols
 
-**Every registered/discovered ID has the fixed prefix `opencode-go/`.** This is
-independent of the optional auth-file `prefix`. For example, select
-`opencode-go/glm-5.3`; upstream receives `glm-5.3`, never the routing prefix.
-An additional host auth prefix may further namespace this ID.
+Fixed model namespace `opencode-go/`; auth `prefix` does not replace it. For
+example, select `opencode-go/glm-5.3`; upstream receives `glm-5.3`, never the
+routing prefix. An additional host auth prefix may further namespace this ID.
 
 | Registered model example | Native upstream protocol | Path under `https://opencode.ai` |
 | --- | --- | --- |

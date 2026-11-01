@@ -27,7 +27,7 @@ func TestRegistryAcceptedByPinnedHostStore(t *testing.T) {
 	if name != "opencode-go_0.2.0_linux_amd64.zip" {
 		t.Fatalf("unexpected host asset %s", name)
 	}
-	_, _, err = pluginstore.SelectReleaseAssets(pluginstore.Release{TagName: "v0.1.2", Assets: []pluginstore.ReleaseAsset{{Name: name}, {Name: "checksums.txt"}}}, plugin.ID, plugin.Version, "linux", "amd64")
+	_, _, err = pluginstore.SelectReleaseAssets(pluginstore.Release{TagName: "v0.2.0", Assets: []pluginstore.ReleaseAsset{{Name: name}, {Name: "checksums.txt"}}}, plugin.ID, plugin.Version, "linux", "amd64")
 	if err != nil {
 		t.Fatal(err)
 	}

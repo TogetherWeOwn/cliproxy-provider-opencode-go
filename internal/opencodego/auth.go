@@ -56,7 +56,12 @@ func newProxyAuth(catalog *catalog) (*proxyAuth, error) {
 }
 
 func (a *proxyAuth) ParseAuth(ctx context.Context, r pluginapi.AuthParseRequest) (pluginapi.AuthParseResponse, error) {
-	a.catalog.setHostProxy(r.Host.ProxyURL)
+	// The kit login submit re-parses the key without host configuration, so
+	// only a configured proxy replaces the shared one: a login must never
+	// clear the host proxy that earlier parses learned.
+	if r.Host.ProxyURL != "" {
+		a.catalog.setHostProxy(r.Host.ProxyURL)
+	}
 	out, err := a.APIKeyAuth.ParseAuth(ctx, r)
 	if err != nil || !out.Handled {
 		return out, err

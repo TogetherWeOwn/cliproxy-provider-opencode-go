@@ -263,6 +263,11 @@ func (e *executor) ExecuteStream(ctx context.Context, r pluginapi.ExecutorReques
 		cancel()
 		return pluginapi.ExecutorStreamResponse{}, err
 	}
+	// The kit re-frames SSE responses to one event per chunk (and drops the
+	// upstream [DONE] marker) whenever the requested output format is OpenAI.
+	// Framed chunks carry no line terminators, so they must be consumed as
+	// whole events, not re-split on byte boundaries.
+	framed := p.output == tr.FormatOpenAI && sseStream(resp.Headers)
 	out := make(chan pluginapi.ExecutorStreamChunk)
 	go func() {
 		defer close(out)
@@ -282,6 +287,12 @@ func (e *executor) ExecuteStream(ctx context.Context, r pluginapi.ExecutorReques
 					return
 				case chunk, ok := <-resp.Chunks:
 					if !ok {
+						// The kit drops the upstream [DONE] marker when it
+						// re-frames; re-emit it so same-protocol OpenAI
+						// streams keep their terminal marker.
+						if framed {
+							send([]byte("data: [DONE]\n\n"), nil)
+						}
 						return
 					}
 					if !send(chunk.Payload, chunk.Err) || chunk.Err != nil {
@@ -292,10 +303,26 @@ func (e *executor) ExecuteStream(ctx context.Context, r pluginapi.ExecutorReques
 		}
 		// Host HTTP chunks have arbitrary byte boundaries. Feed complete SSE data
 		// events into the SDK, maintaining one translator state per request.
+		// In framed mode each kit chunk is already one complete event.
 		var pending, data []byte
 		terminal, doneSent := false, false
 		var param any
-		emit := func() bool {
+		var emit func() bool
+		framedEvent := func(payload []byte) bool {
+			event := bytes.TrimSpace(payload)
+			if len(event) == 0 || event[0] == ':' {
+				return true // keep-alive comment
+			}
+			if rest, ok := bytes.CutPrefix(event, []byte("data:")); ok {
+				event = bytes.TrimPrefix(rest, []byte(" "))
+			}
+			if len(event) > maxUsageResponse {
+				return false
+			}
+			data = event
+			return emit()
+		}
+		emit = func() bool {
 			if len(data) == 0 {
 				return true
 			}
@@ -354,6 +381,13 @@ func (e *executor) ExecuteStream(ctx context.Context, r pluginapi.ExecutorReques
 					send(nil, chunk.Err)
 					return
 				}
+				if framed {
+					if !framedEvent(chunk.Payload) {
+						send(nil, invalidStream())
+						return
+					}
+					continue
+				}
 				pending = append(pending, chunk.Payload...)
 				for {
 					idx := bytes.IndexByte(pending, '\n')
@@ -377,6 +411,9 @@ func (e *executor) ExecuteStream(ctx context.Context, r pluginapi.ExecutorReques
 }
 func invalidStream() *pluginabi.Error {
 	return &pluginabi.Error{Code: "invalid_stream", Message: "upstream SSE event exceeds maximum size", HTTPStatus: 502}
+}
+func sseStream(h http.Header) bool {
+	return strings.Contains(strings.ToLower(h.Get("Content-Type")), "text/event-stream")
 }
 func (*executor) CountTokens(ctx context.Context, r pluginapi.ExecutorRequest) (pluginapi.ExecutorResponse, error) {
 	return (kit.Passthrough{}).CountTokens(ctx, r)

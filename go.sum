@@ -1,9 +1,7 @@
 cloud.google.com/go/compute/metadata v0.3.0 h1:Tz+eQXMEqDIKRsmY3cHTL6FVaynIjX2QxYC4trgAKZc=
 cloud.google.com/go/compute/metadata v0.3.0/go.mod h1:zFmK7XCadkQkj6TtorcaGlCW1hT1fIilQDwofLpJ20k=
-github.com/TogetherWeOwn/cliproxy-provider-kit v0.1.1-0.20261101054300-21069bfec8f1 h1:tabEPHE+SjbfuMzTQJfYNvNiVIknMoJnLeOwQMOetuw=
-github.com/TogetherWeOwn/cliproxy-provider-kit v0.1.1-0.20261101054300-21069bfec8f1/go.mod h1:KlPk3GO5ELVr2/lWYJABmYGC/jUn2XkQzAw8fhk4ECY=
-github.com/TogetherWeOwn/cliproxy-provider-kit v0.1.1-0.20261101093347-5b5e6bc84716 h1:6ypfBcELjAHZC36JG+6yI5SmaU83rzyFYI4EWc5g6qw=
-github.com/TogetherWeOwn/cliproxy-provider-kit v0.1.1-0.20261101093347-5b5e6bc84716/go.mod h1:KlPk3GO5ELVr2/lWYJABmYGC/jUn2XkQzAw8fhk4ECY=
+github.com/TogetherWeOwn/cliproxy-provider-kit v0.1.1-0.20261101115341-88850ce995e6 h1:PjsDSiGDFSLd125El3lOST7utFgAHryyIEt5cQHDshs=
+github.com/TogetherWeOwn/cliproxy-provider-kit v0.1.1-0.20261101115341-88850ce995e6/go.mod h1:KlPk3GO5ELVr2/lWYJABmYGC/jUn2XkQzAw8fhk4ECY=
 github.com/andybalholm/brotli v1.0.6 h1:Yf9fFpf49Zrxb9NlQaluyE92/+X7UVHlhMNJN2sxfOI=
 github.com/andybalholm/brotli v1.0.6/go.mod h1:fO7iG3H7G2nSZ7m0zPUDn85XEX2GTukHGRSepvi9Eig=
 github.com/bsm/ginkgo/v2 v2.12.0 h1:Ny8MWAHyOepLGlLKYmXG4IEkioBysk6GpaRTLC8zwWs=

@@ -1,7 +1,7 @@
 # Migration: staging first, then per-provider cutover
 
 This is an operator-run checklist, not an unattended migration or deployment.
-The plugin has been exercised with mocked upstreams through the real v8.0.48
+The plugin has been exercised with mocked upstreams through the real v8.0.49
 host loader. Live provider validation remains pending. Do not run a migration
 against a live config without a private backup and an agreed rollback window.
 
@@ -9,7 +9,7 @@ against a live config without a private backup and an agreed rollback window.
 
 1. Keep the production CLIProxy unchanged. Back up its config and auth directory
    privately. Never commit config backups, keys, account labels or addresses.
-2. Use stock CLIProxy v8.0.48 with an isolated staging config, auth directory,
+2. Use stock CLIProxy v8.0.49 with an isolated staging config, auth directory,
    plugin directory and listen port. Do not share mutable directories with
    production. Build/install only the production artifact, not a binary built
    with the `hostcompat` tag.

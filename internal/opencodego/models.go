@@ -117,7 +117,7 @@ func (c *catalog) load(ctx context.Context, storage []byte, metadata map[string]
 	}
 	// Discovery sends the key directly, so route it like host requests.
 	proxyCtx := kit.WithProxyURL(ctx, kit.AuthProxyURL(storage, metadata, hostProxy))
-	resp, err := c.client.Do(proxyCtx, pluginapi.HTTPRequest{URL: c.base() + "/inference/go/v1/models", Headers: http.Header{"Authorization": {"Bearer " + key}, "Accept": {"application/json"}, "User-Agent": {"cliproxy-provider-opencode-go/0.1.1"}}})
+	resp, err := c.client.Do(proxyCtx, pluginapi.HTTPRequest{URL: c.base() + "/inference/go/v1/models", Headers: http.Header{"Authorization": {"Bearer " + key}, "Accept": {"application/json"}, "User-Agent": {"cliproxy-provider-opencode-go/0.1.2"}}})
 	routes := map[string]string(nil)
 	if err == nil {
 		routes, err = parseModels(resp.Body)

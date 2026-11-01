@@ -3,7 +3,8 @@
 A first-class OpenCode Go provider plugin for **CLIProxyAPI v8.0.48**, built
 against
 [`cliproxy-provider-kit`](https://github.com/TogetherWeOwn/cliproxy-provider-kit)
-at `de8b318` (v0.1.0 plus quota/discovery proxy support).
+at `c81b686` (v0.1.0 plus quota/discovery proxy support and acceptance of
+newer host RPC schemas).
 It implements API-key auth, model registration/discovery, multi-protocol
 inference (including streaming), and read-only quota cards. **Live provider
 verification and staging acceptance remain pending.** No provider endpoints are
@@ -141,9 +142,9 @@ a loopback-only mock base; production artifacts have a fixed provider origin.
 
 CI checks formatting, module verification, vet, race tests, the shared library
 entry point, the host registry schema, gitleaks and generic public-file hygiene.
-`dist/opencode-go_0.1.0_linux_amd64.zip` contains `opencode-go.so`, its
+`dist/opencode-go_0.1.1_linux_amd64.zip` contains `opencode-go.so`, its
 `checksums.txt`, and `LICENSE`. The external `dist/checksums.txt` hashes the ZIP
-for the host store. Publish both assets on tag `v0.1.0`; packaging itself never
+for the host store. Publish both assets on tag `v0.1.1`; packaging itself never
 publishes, installs or restarts anything.
 
 ## Installation and migration
@@ -164,7 +165,7 @@ plugins:
 ```
 
 The store installs the release as
-`plugins/linux/amd64/opencode-go-v0.1.0.so`. A native `openai-compatibility`
+`plugins/linux/amd64/opencode-go-v0.1.1.so`. A native `openai-compatibility`
 entry named `opencode-go` pre-empts the plugin executor; remove it from the
 **staging config copy** before testing, and from production only at cutover.
 The offline `cmd/migrate` tool reads a config copy and creates disabled private

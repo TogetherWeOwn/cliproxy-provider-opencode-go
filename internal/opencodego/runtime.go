@@ -14,7 +14,7 @@ func NewRuntime(host kit.Caller) (*kit.Runtime, error) {
 	c.base = selectedBase
 	q := newQuotaWithClient(selectedBase, c.client)
 	return kit.New(kit.Definition{
-		Metadata:  pluginapi.Metadata{Name: provider, Version: "0.1.0", Author: "TogetherWeOwn", GitHubRepository: "https://github.com/TogetherWeOwn/cliproxy-provider-opencode-go"},
+		Metadata:  pluginapi.Metadata{Name: provider, Version: "0.1.1", Author: "TogetherWeOwn", GitHubRepository: "https://github.com/TogetherWeOwn/cliproxy-provider-opencode-go"},
 		Configure: configureBase,
 		Capabilities: pluginapi.Capabilities{
 			AuthProvider: proxyAuth{newAuth(), c}, ModelProvider: c, ModelRegistrar: c, Executor: newExecutor(c), QuotaProvider: q,

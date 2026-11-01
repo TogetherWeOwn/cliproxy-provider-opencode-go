@@ -398,9 +398,9 @@ func TestSameProtocolRelayRejectsTruncation(t *testing.T) {
 	complete := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
 	cut := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n"
 	for _, tc := range []struct {
-		name    string
+		name     string
 		upstream string
-		wantErr bool
+		wantErr  bool
 	}{
 		{"cut mid-choice", cut, true},
 		{"cut after finish", complete, false},

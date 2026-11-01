@@ -27,7 +27,7 @@ func TestReleaseArchiveAndChecksums(t *testing.T) {
 	if result, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("packaging: %v\n%s", err, result)
 	}
-	name := "opencode-go_0.2.0_linux_amd64.zip"
+	name := "opencode-go_0.2.1_linux_amd64.zip"
 	raw, err := os.ReadFile(filepath.Join(out, name))
 	if err != nil {
 		t.Fatal(err)

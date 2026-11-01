@@ -22,7 +22,7 @@ against a live config without a private backup and an agreed rollback window.
    executors, even if model names look identical. Remove the old
    `subscription-pool.providers.opencode` block and disable the obsolete
    `opencode-go-pool` plugin in this staging copy. Quarantine any old
-   `opencode-go-pool-v0.2.0.so` outside the staging plugin search directory.
+   `opencode-go-pool-v0.2.1.so` outside the staging plugin search directory.
 5. Do not install two versions/filenames that claim the same plugin ID.
 
 ## 2. Create private auth files offline

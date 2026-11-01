@@ -573,6 +573,44 @@ func TestSameProtocolRelayForwardsErrorChunksWithoutPayload(t *testing.T) {
 	}
 }
 
+// Regression (Devin Review): an empty request Format makes the kit frame the
+// stream as OpenAI, but the resolved protocol can be non-OpenAI with its own
+// terminal events. A healthy Claude stream ending in message_stop must close
+// cleanly — per-choice finish tracking must not reject it as truncated.
+func TestSameProtocolRelayLeavesNonOpenAICompletionAlone(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.WriteHeader(503)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, wireResponse("claude", true))
+	}))
+	defer s.Close()
+	ex := newExecutor(newCatalog(s.URL, nil))
+	req := clientRequest("claude", "minimax-m3", true)
+	req.Format = "" // empty output: kit frames as OpenAI, protocol resolves to Claude
+	req.Metadata = nil
+	req.HTTPClient = testHTTP{s.Client()}
+	resp, err := ex.ExecuteStream(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	for c := range resp.Chunks {
+		if c.Err != nil {
+			t.Fatalf("healthy non-OpenAI stream rejected: %v", c.Err)
+		}
+		out.Write(c.Payload)
+	}
+	if !strings.Contains(out.String(), "message_stop") {
+		t.Fatalf("terminal event lost: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "hello") {
+		t.Fatalf("content lost: %q", out.String())
+	}
+}
+
 func TestTranslatedStreamRejectsTruncationAndOversizedEvents(t *testing.T) {
 	for _, raw := range []string{
 		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n",

@@ -296,8 +296,15 @@ func (e *executor) ExecuteStream(ctx context.Context, r pluginapi.ExecutorReques
 			// are still tracked because the kit drops the upstream
 			// [DONE]: a close before every choice finishes is a
 			// truncation, not a clean end, mirroring the translated
-			// path's stream_truncated. Error chunks carry no payload;
-			// framing a nil payload would emit a bogus empty data event.
+			// path's stream_truncated. Tracking is OpenAI-specific: the
+			// kit also frames empty-Format streams as OpenAI, but a
+			// resolved non-OpenAI protocol carries its own terminal
+			// events, not per-choice finish reasons. Tracking those
+			// chunks would reject healthy streams, so they keep the
+			// verbatim passthrough with no truncation verdict. Error
+			// chunks carry no payload; framing a nil payload would emit
+			// a bogus empty data event.
+			trackCompletion := framed && p.output == tr.FormatOpenAI
 			completion := newOpenAICompletion()
 			for {
 				select {
@@ -305,7 +312,7 @@ func (e *executor) ExecuteStream(ctx context.Context, r pluginapi.ExecutorReques
 					return
 				case chunk, ok := <-resp.Chunks:
 					if !ok {
-						if framed && !completion.done() {
+						if trackCompletion && !completion.done() {
 							send(nil, truncatedStream())
 						}
 						return
@@ -314,7 +321,7 @@ func (e *executor) ExecuteStream(ctx context.Context, r pluginapi.ExecutorReques
 						send(nil, chunk.Err)
 						return
 					}
-					if framed {
+					if trackCompletion {
 						completion.observe(chunk.Payload)
 					}
 					if !send(chunk.Payload, nil) {

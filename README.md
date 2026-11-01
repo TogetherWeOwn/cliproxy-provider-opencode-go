@@ -153,9 +153,9 @@ a loopback-only mock base; production artifacts have a fixed provider origin.
 
 CI checks formatting, module verification, vet, race tests, the shared library
 entry point, the host registry schema, gitleaks and generic public-file hygiene.
-`dist/opencode-go_0.2.0_linux_amd64.zip` contains `opencode-go.so`, its
+`dist/opencode-go_0.2.1_linux_amd64.zip` contains `opencode-go.so`, its
 `checksums.txt`, and `LICENSE`. The external `dist/checksums.txt` hashes the ZIP
-for the host store. Publish both assets on tag `v0.2.0`; packaging itself never
+for the host store. Publish both assets on tag `v0.2.1`; packaging itself never
 publishes, installs or restarts anything.
 
 ## Installation and migration
@@ -176,7 +176,7 @@ plugins:
 ```
 
 The store installs the release as
-`plugins/linux/amd64/opencode-go-v0.2.0.so`. A native `openai-compatibility`
+`plugins/linux/amd64/opencode-go-v0.2.1.so`. A native `openai-compatibility`
 entry named `opencode-go` pre-empts the plugin executor; remove it from the
 **staging config copy** before testing, and from production only at cutover.
 The offline `cmd/migrate` tool reads a config copy and creates disabled private

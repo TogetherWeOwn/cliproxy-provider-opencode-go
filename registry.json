@@ -7,7 +7,7 @@
       "description": "API-key authentication, prefixed multi-protocol models, native host routing and display-only quota cards",
       "author": "TogetherWeOwn",
       "repository": "https://github.com/TogetherWeOwn/cliproxy-provider-opencode-go",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "license": "MIT",
       "tags": ["provider", "opencode-go", "quota"],
       "install": {"type": "github-release"}

@@ -152,7 +152,7 @@ func (e *executor) prepare(ctx context.Context, r pluginapi.ExecutorRequest) (pr
 	if err != nil {
 		return preparedRequest{}, err
 	}
-	headers := http.Header{"Authorization": {"Bearer " + key}, "Content-Type": {"application/json"}, "User-Agent": {"cliproxy-provider-opencode-go/0.1.0"}}
+	headers := http.Header{"Authorization": {"Bearer " + key}, "Content-Type": {"application/json"}, "User-Agent": {"cliproxy-provider-opencode-go/0.1.1"}}
 	if ua := r.Headers.Get("User-Agent"); ua != "" {
 		headers.Set("User-Agent", ua)
 	}

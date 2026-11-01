@@ -36,7 +36,7 @@ Usage settings must be assessed before any real cutover.
 
 ## Host/kit contracts
 
-Kit commit `de8b318` (v0.1.0 plus quota/discovery proxy support) and CLIProxyAPI v8.0.48 are pinned in `go.mod`.
+Kit commit `c81b686` (v0.1.0 plus quota/discovery proxy support and acceptance of newer host RPC schemas) and CLIProxyAPI v8.0.48 are pinned in `go.mod`.
 Relevant paths in the pinned upstream source:
 
 - `sdk/pluginapi/types.go`: capability and transport interfaces.

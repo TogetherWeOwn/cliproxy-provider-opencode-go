@@ -52,10 +52,9 @@ input. No browser sessions or dashboard scraping are used.
 
 ## Models and protocols
 
-**Every registered/discovered ID has the fixed prefix `opencode-go/`.** This is
-independent of the optional auth-file `prefix`. For example, select
-`opencode-go/glm-5.3`; upstream receives `glm-5.3`, never the routing prefix.
-An additional host auth prefix may further namespace this ID.
+Fixed model namespace `opencode-go/`; auth `prefix` does not replace it. For
+example, select `opencode-go/glm-5.3`; upstream receives `glm-5.3`, never the
+routing prefix. An additional host auth prefix may further namespace this ID.
 
 | Registered model example | Native upstream protocol | Path under `https://opencode.ai` |
 | --- | --- | --- |

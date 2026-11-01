@@ -2,6 +2,8 @@ package opencodego
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"sync"
 
@@ -29,17 +31,35 @@ func newAuth() kit.APIKeyAuth {
 //
 // It also guards against the same API key being configured in two auth
 // files: ownership is by filename, so a watcher's repeated parse of one file
-// is safe. Only digests are retained; keys never appear in duplicate errors.
+// is safe. Only HMAC-SHA256 digests under a random per-process key are
+// retained; keys never appear in duplicate errors and digests are useless
+// across restarts.
 type proxyAuth struct {
 	kit.APIKeyAuth
 	catalog *catalog
 	mu      sync.Mutex
+	macKey  [32]byte
 	files   map[string][32]byte
 	owners  map[[32]byte]string
 }
 
 func newProxyAuth(catalog *catalog) *proxyAuth {
-	return &proxyAuth{APIKeyAuth: newAuth(), catalog: catalog, files: make(map[string][32]byte), owners: make(map[[32]byte]string)}
+	a := &proxyAuth{APIKeyAuth: newAuth(), catalog: catalog, files: make(map[string][32]byte), owners: make(map[[32]byte]string)}
+	if _, err := rand.Read(a.macKey[:]); err != nil {
+		panic("proxyAuth: crypto/rand unavailable: " + err.Error())
+	}
+	return a
+}
+
+// keyDigest identifies a key for duplicate detection only. The per-process
+// HMAC key means the digest is not a password hash and cannot be verified
+// or reused outside this process.
+func (a *proxyAuth) keyDigest(key string) [32]byte {
+	mac := hmac.New(sha256.New, a.macKey[:])
+	_, _ = mac.Write([]byte(key))
+	var digest [32]byte
+	copy(digest[:], mac.Sum(nil))
+	return digest
 }
 
 func (a *proxyAuth) ParseAuth(ctx context.Context, r pluginapi.AuthParseRequest) (pluginapi.AuthParseResponse, error) {
@@ -52,7 +72,7 @@ func (a *proxyAuth) ParseAuth(ctx context.Context, r pluginapi.AuthParseRequest)
 	if err != nil {
 		return pluginapi.AuthParseResponse{}, err
 	}
-	digest := sha256.Sum256([]byte(key))
+	digest := a.keyDigest(key)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if file, ok := a.owners[digest]; ok && file != r.FileName {

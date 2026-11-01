@@ -64,13 +64,44 @@ func TestExecutorDiscoveryUsesHostProxyFromAuthParse(t *testing.T) {
 	hostProxy, seen := newProxyRecorder(t, `{"data":[{"id":"glm-5.3","protocol":"openai"}]}`)
 	c := newCatalog("http://opencode.invalid", nil)
 	defer c.client.CloseIdleConnections()
-	auth := newProxyAuth(c)
+	auth, err := newProxyAuth(c)
+	if err != nil {
+		t.Fatal(err)
+	}
 	parsed, err := auth.ParseAuth(context.Background(), pluginapi.AuthParseRequest{RawJSON: []byte(`{"type":"opencode-go","api_key":"key"}`), Host: pluginapi.HostConfigSummary{ProxyURL: hostProxy.URL}})
 	if err != nil || !parsed.Handled {
 		t.Fatal(parsed, err)
 	}
 	// No ModelsForAuth call precedes this executor-path lookup.
 	if _, err := c.resolve(context.Background(), "glm-5.3", parsed.Auth.StorageJSON, parsed.Auth.Metadata); err != nil {
+		t.Fatal(err)
+	}
+	if got := seen(); len(got) != 1 || got[0] != "http://opencode.invalid/inference/go/v1/models" {
+		t.Fatalf("host proxy saw %v", got)
+	}
+}
+
+func TestLoginParseDoesNotClearHostProxy(t *testing.T) {
+	hostProxy, seen := newProxyRecorder(t, `{"data":[{"id":"glm-5.3","protocol":"openai"}]}`)
+	c := newCatalog("http://opencode.invalid", nil)
+	defer c.client.CloseIdleConnections()
+	auth, err := newProxyAuth(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A normal auth-file parse learns the host proxy.
+	if _, err := auth.ParseAuth(context.Background(), pluginapi.AuthParseRequest{FileName: "a.json",
+		RawJSON: []byte(`{"type":"opencode-go","api_key":"key"}`), Host: pluginapi.HostConfigSummary{ProxyURL: hostProxy.URL}}); err != nil {
+		t.Fatal(err)
+	}
+	// The kit login submit re-parses without host configuration; it must not
+	// clear the proxy, or later executor-path discovery bypasses it.
+	if _, err := auth.ParseAuth(context.Background(), pluginapi.AuthParseRequest{Provider: "opencode-go",
+		FileName: "opencode-go-0123456789ab.json", Path: "opencode-go-0123456789ab.json",
+		RawJSON: []byte(`{"type":"opencode-go","api_key":"other-key"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.resolve(context.Background(), "glm-5.3", []byte(`{"api_key":"key"}`), nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := seen(); len(got) != 1 || got[0] != "http://opencode.invalid/inference/go/v1/models" {

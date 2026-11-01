@@ -42,13 +42,23 @@ These are placeholders, not usable credentials:
 
 Use mode `0600`. `quota_api_key` is optional and defaults to `api_key`.
 New Console keys normally begin `oc_sk_`; legacy `sk-` keys may also work.
-Console device OAuth is not the Go API-key flow. Login/poll operations return an
-API-key-only error; refresh preserves the key. IDs are stable
+Console device OAuth is not the Go API-key flow; see Management-UI login
+below. Refresh preserves the key. IDs are stable
 `opencode-go:<first 12 hex SHA256 characters of api_key>` unless an explicit
 `id` is supplied. `prefix`, `proxy_url`, and the host's routing fields are
 preserved. Model discovery and quota polls go through the auth's
 `proxy_url`, else the host's global `proxy-url`, like inference does. Optional `workspace` is metadata only, never an HTTP path or scraping
 input. No browser sessions or dashboard scraping are used.
+
+## Management-UI login
+
+The management UI's **Start OpenCode Go Login** card serves a kit login page
+that prompts for the API key and the optional `quota_api_key` and `workspace`
+fields, then submits them over an authenticated management POST (secrets travel
+in the POST body only, never in URLs, logs or process arguments). The
+submission runs the same ParseAuth validation and duplicate-key guard as an
+uploaded auth file. Blank optional fields are skipped. On a remote host, set
+`CLIPROXY_BASE` to an `https://` base so secrets are encrypted in transit.
 
 ## Models and protocols
 
@@ -141,9 +151,9 @@ a loopback-only mock base; production artifacts have a fixed provider origin.
 
 CI checks formatting, module verification, vet, race tests, the shared library
 entry point, the host registry schema, gitleaks and generic public-file hygiene.
-`dist/opencode-go_0.1.2_linux_amd64.zip` contains `opencode-go.so`, its
+`dist/opencode-go_0.2.0_linux_amd64.zip` contains `opencode-go.so`, its
 `checksums.txt`, and `LICENSE`. The external `dist/checksums.txt` hashes the ZIP
-for the host store. Publish both assets on tag `v0.1.2`; packaging itself never
+for the host store. Publish both assets on tag `v0.2.0`; packaging itself never
 publishes, installs or restarts anything.
 
 ## Installation and migration
@@ -164,7 +174,7 @@ plugins:
 ```
 
 The store installs the release as
-`plugins/linux/amd64/opencode-go-v0.1.2.so`. A native `openai-compatibility`
+`plugins/linux/amd64/opencode-go-v0.2.0.so`. A native `openai-compatibility`
 entry named `opencode-go` pre-empts the plugin executor; remove it from the
 **staging config copy** before testing, and from production only at cutover.
 The offline `cmd/migrate` tool reads a config copy and creates disabled private

@@ -44,7 +44,7 @@ func newProxyAuth(catalog *catalog) (*proxyAuth, error) {
 		Provider: "opencode-go",
 		Parse:    a.ParseAuth,
 		Fields: []kit.APIKeyLoginField{
-			{Name: "quota_api_key", Label: "Quota API key", Description: "Optional separate key for quota polling. Leave blank to skip.", Required: false},
+			{Name: "quota_api_key", Label: "Quota API key", Description: "Optional separate key for quota polling. Leave blank to skip.", Required: false, Secret: true},
 			{Name: "workspace", Label: "Workspace", Description: "Optional workspace. Leave blank to skip.", Required: false},
 		},
 	})

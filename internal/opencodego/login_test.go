@@ -54,7 +54,9 @@ func TestAPIKeyLoginWired(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(start.URL, "http://127.0.0.1:19000"+testResourceBase+"/login?state=") {
+	// The kit returns a root-relative login URL so the panel resolves it
+	// against its own origin instead of the host's loopback callback base.
+	if !strings.HasPrefix(start.URL, testResourceBase+"/login?state=") {
 		t.Fatalf("unexpected login URL %q", start.URL)
 	}
 	poll, err := p.PollLogin(ctx, pluginapi.AuthLoginPollRequest{State: start.State})
@@ -67,10 +69,15 @@ func TestAPIKeyLoginWired(t *testing.T) {
 		t.Fatalf("login page %+v %v", page, err)
 	}
 	body := html.UnescapeString(string(page.Body))
-	for _, want := range []string{"read -r PLUGIN_FIELD_WORKSPACE", `"workspace":"$ESC_FIELD_WORKSPACE"`, "Workspace"} {
+	// The quota key is a secret: hidden input, like the main API key. The
+	// workspace stays visible.
+	for _, want := range []string{"read -rs PLUGIN_API_KEY", "read -rs PLUGIN_FIELD_QUOTA_API_KEY", "read -r PLUGIN_FIELD_WORKSPACE", `"workspace":"$ESC_FIELD_WORKSPACE"`, "Workspace"} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("page missing workspace wiring %q", want)
+			t.Fatalf("page missing login field wiring %q", want)
 		}
+	}
+	if strings.Contains(body, "read -r PLUGIN_FIELD_QUOTA_API_KEY") {
+		t.Fatal("quota key read with echoing input")
 	}
 	submit, err := login.HandleManagement(ctx, pluginapi.ManagementRequest{Method: "POST",
 		Path: testSubmitPath,

@@ -332,7 +332,7 @@ func clientRequest(format, id string, stream bool) pluginapi.ExecutorRequest {
 	return pluginapi.ExecutorRequest{Model: model, SourceFormat: format, Format: format, Stream: stream, Payload: raw, StorageJSON: []byte(`{"api_key":"example-key"}`)}
 }
 
-// Regression (Devin Review on TWO-683): in framed mode the kit delivers one
+// Regression (Devin Review): in framed mode the kit delivers one
 // complete JSON event per chunk with no line terminators, so the
 // same-protocol relay must re-frame each chunk into a complete SSE event.
 // Table covers both kit chunk shapes: "data:"-framed (no request_path
@@ -390,7 +390,7 @@ func TestSameProtocolRelayEmitsParseableSSE(t *testing.T) {
 	}
 }
 
-// Regression (Devin Review on TWO-683): a same-protocol close before every
+// Regression (Devin Review): a same-protocol close before every
 // choice finishes is a truncation (stream_truncated, no [DONE]); a close
 // after complete choices keeps the terminal marker, mirroring the
 // translated path.

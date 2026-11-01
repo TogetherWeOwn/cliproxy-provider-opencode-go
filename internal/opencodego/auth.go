@@ -2,7 +2,7 @@ package opencodego
 
 import (
 	"context"
-	"sync"
+	"time"
 
 	kit "github.com/TogetherWeOwn/cliproxy-provider-kit"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
@@ -27,22 +27,31 @@ func newAuth() kit.APIKeyAuth {
 // the executor path has the host proxy even before any ModelsForAuth call.
 //
 // It also guards against the same API key being configured in two auth
-// files: ownership is by filename, so a watcher's repeated parse of one file
-// is safe. Only credentialDigest values are retained; keys never appear in
-// duplicate errors and digests are useless across restarts.
+// files through kit.KeyOwnership: ownership is by filename, so a watcher's
+// repeated parse of one file is safe, and a provisional login-validation
+// parse only reserves the digest until the login session expires, so an
+// abandoned login releases the key instead of holding it until restart.
+// Only credentialDigest values are retained; keys never appear in duplicate
+// errors and digests are useless across restarts.
 type proxyAuth struct {
 	kit.APIKeyAuth
 	catalog *catalog
-	mu      sync.Mutex
-	files   map[string][32]byte
-	owners  map[[32]byte]string
+	guard   kit.KeyOwnership
 }
 
 func newProxyAuth(catalog *catalog) (*proxyAuth, error) {
-	a := &proxyAuth{APIKeyAuth: newAuth(), catalog: catalog, files: make(map[string][32]byte), owners: make(map[[32]byte]string)}
+	return newProxyAuthWithLoginTTL(catalog, 0)
+}
+
+// newProxyAuthWithLoginTTL is newProxyAuth with an explicit login session
+// TTL (zero keeps the kit default); tests use a short TTL to observe an
+// abandoned login releasing its key reservation.
+func newProxyAuthWithLoginTTL(catalog *catalog, loginTTL time.Duration) (*proxyAuth, error) {
+	a := &proxyAuth{APIKeyAuth: newAuth(), catalog: catalog}
 	login, err := kit.NewAPIKeyLogin(kit.APIKeyLoginConfig{
-		Provider: "opencode-go",
-		Parse:    a.ParseAuth,
+		Provider:   "opencode-go",
+		Parse:      a.ParseAuth,
+		SessionTTL: loginTTL,
 		Fields: []kit.APIKeyLoginField{
 			{Name: "quota_api_key", Label: "Quota API key", Description: "Optional separate key for quota polling. Leave blank to skip.", Required: false, Secret: true},
 			{Name: "workspace", Label: "Workspace", Description: "Optional workspace. Leave blank to skip.", Required: false},
@@ -71,16 +80,9 @@ func (a *proxyAuth) ParseAuth(ctx context.Context, r pluginapi.AuthParseRequest)
 		return pluginapi.AuthParseResponse{}, err
 	}
 	digest := credentialDigest(key)
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if file, ok := a.owners[digest]; ok && file != r.FileName {
-		return pluginapi.AuthParseResponse{}, &pluginabi.Error{Code: "duplicate_auth", Message: "the same API key is already configured in another auth file", HTTPStatus: 400}
+	if err := a.guard.Claim(ctx, r.FileName, digest); err != nil {
+		return pluginapi.AuthParseResponse{}, err
 	}
-	if old, ok := a.files[r.FileName]; ok && old != digest {
-		delete(a.owners, old)
-	}
-	a.files[r.FileName] = digest
-	a.owners[digest] = r.FileName
 	return out, nil
 }
 func (a *proxyAuth) RefreshAuth(ctx context.Context, r pluginapi.AuthRefreshRequest) (pluginapi.AuthRefreshResponse, error) {

@@ -1,10 +1,10 @@
 # OpenCode Go provider for CLIProxyAPI
 
-A first-class OpenCode Go provider plugin for **CLIProxyAPI v8.0.48**, built
+A first-class OpenCode Go provider plugin for **CLIProxyAPI v8.0.49**, built
 against
 [`cliproxy-provider-kit`](https://github.com/TogetherWeOwn/cliproxy-provider-kit)
-at `c81b686` (v0.1.0 plus quota/discovery proxy support and acceptance of
-newer host RPC schemas).
+at `21069bf` (v0.1.0 plus quota/discovery proxy support and the v8.0.49
+plugin ABI: RPC schema 10; hosts older than schema 10 are refused).
 It implements API-key auth, model registration/discovery, multi-protocol
 inference (including streaming), and read-only quota cards. **Live provider
 verification and staging acceptance remain pending.** No provider endpoints are
@@ -132,7 +132,7 @@ go -C integration/hostcompat test -race -count=1 -v ./...
 bash scripts/package-release.sh ./dist
 ```
 
-The separate `integration/hostcompat` module imports the **real v8.0.48 host
+The separate `integration/hostcompat` module imports the **real v8.0.49 host
 loader** using the kit's import-namespace pattern, without a fork or host
 patch. It loads the C shared library and exercises auth, models, quota,
 non-stream/stream execution through all protocol families, nonzero host usage
@@ -142,9 +142,9 @@ a loopback-only mock base; production artifacts have a fixed provider origin.
 
 CI checks formatting, module verification, vet, race tests, the shared library
 entry point, the host registry schema, gitleaks and generic public-file hygiene.
-`dist/opencode-go_0.1.1_linux_amd64.zip` contains `opencode-go.so`, its
+`dist/opencode-go_0.1.2_linux_amd64.zip` contains `opencode-go.so`, its
 `checksums.txt`, and `LICENSE`. The external `dist/checksums.txt` hashes the ZIP
-for the host store. Publish both assets on tag `v0.1.1`; packaging itself never
+for the host store. Publish both assets on tag `v0.1.2`; packaging itself never
 publishes, installs or restarts anything.
 
 ## Installation and migration
@@ -165,7 +165,7 @@ plugins:
 ```
 
 The store installs the release as
-`plugins/linux/amd64/opencode-go-v0.1.1.so`. A native `openai-compatibility`
+`plugins/linux/amd64/opencode-go-v0.1.2.so`. A native `openai-compatibility`
 entry named `opencode-go` pre-empts the plugin executor; remove it from the
 **staging config copy** before testing, and from production only at cutover.
 The offline `cmd/migrate` tool reads a config copy and creates disabled private

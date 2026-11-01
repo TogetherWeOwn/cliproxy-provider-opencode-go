@@ -152,7 +152,7 @@ func (e *executor) prepare(ctx context.Context, r pluginapi.ExecutorRequest) (pr
 	if err != nil {
 		return preparedRequest{}, err
 	}
-	headers := http.Header{"Authorization": {"Bearer " + key}, "Content-Type": {"application/json"}, "User-Agent": {"cliproxy-provider-opencode-go/0.1.1"}}
+	headers := http.Header{"Authorization": {"Bearer " + key}, "Content-Type": {"application/json"}, "User-Agent": {"cliproxy-provider-opencode-go/0.1.2"}}
 	if ua := r.Headers.Get("User-Agent"); ua != "" {
 		headers.Set("User-Agent", ua)
 	}
@@ -440,7 +440,7 @@ func sseFrame(raw []byte) []byte {
 	return append(append([]byte("data: "), raw...), '\n', '\n')
 }
 
-// v8.0.48 exposes Chat/Messages/Gemini -> Responses wire conversion under the
+// v8.0.49 exposes Chat/Messages/Gemini -> Responses wire conversion under the
 // SDK's "codex" format, not "openai-response". We reuse that schema conversion
 // only: never a Codex endpoint/auth flow, and never its token-limit stripping.
 func restoreResponsesControls(out map[string]json.RawMessage, raw []byte, source tr.Format) {

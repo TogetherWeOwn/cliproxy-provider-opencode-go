@@ -36,7 +36,7 @@ Usage settings must be assessed before any real cutover.
 
 ## Host/kit contracts
 
-Kit commit `c81b686` (v0.1.0 plus quota/discovery proxy support and acceptance of newer host RPC schemas) and CLIProxyAPI v8.0.48 are pinned in `go.mod`.
+Kit commit `21069bf` (v0.1.0 plus quota/discovery proxy support and the v8.0.49 plugin ABI, RPC schema 10; older hosts are refused) and CLIProxyAPI v8.0.49 are pinned in `go.mod`.
 Relevant paths in the pinned upstream source:
 
 - `sdk/pluginapi/types.go`: capability and transport interfaces.
@@ -51,7 +51,7 @@ Relevant paths in the pinned upstream source:
 
 Three SDK wire-conversion details are handled locally, without patching core:
 
-1. General client-to-Responses conversion is exposed by v8.0.48's built-in
+1. General client-to-Responses conversion is exposed by v8.0.49's built-in
    translator under `codex`. Only its wire conversion is reused. Token limits
    and general generation controls are restored, and synthesized Codex defaults
    are removed. Non-stream Responses JSON is wrapped in the terminal-event

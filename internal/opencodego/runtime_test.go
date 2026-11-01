@@ -15,7 +15,7 @@ func TestRuntimeRegistersNativeProviderCapabilitiesWithoutScheduler(t *testing.T
 	}
 	defer r.Shutdown(context.Background())
 	var envelope pluginabi.Envelope
-	if err := json.Unmarshal(r.Call(context.Background(), "plugin.register", []byte(`{"schema_version":9}`)), &envelope); err != nil {
+	if err := json.Unmarshal(r.Call(context.Background(), "plugin.register", []byte(`{"schema_version":10}`)), &envelope); err != nil {
 		t.Fatal(err)
 	}
 	if !envelope.OK {

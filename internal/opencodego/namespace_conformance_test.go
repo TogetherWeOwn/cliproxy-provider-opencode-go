@@ -46,6 +46,19 @@ func TestModelNamespaceConformance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The fixture id is absent from staticRoutes, so this proves the
+	// discovery leg supplied a model rather than the assertion passing on
+	// static entries alone.
+	found := false
+	for _, m := range discovered.Models {
+		if m.ID == "opencode-go/conformance-probe-only" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("discovery did not supply the fixture-only model: %+v", discovered.Models)
+	}
 	all = append(all, discovered.Models...)
 
 	if len(all) == 0 {

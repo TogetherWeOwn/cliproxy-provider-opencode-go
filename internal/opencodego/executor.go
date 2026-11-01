@@ -267,7 +267,12 @@ func (e *executor) ExecuteStream(ctx context.Context, r pluginapi.ExecutorReques
 	// upstream [DONE] marker) whenever the requested output format is OpenAI.
 	// Framed chunks carry no line terminators, so they must be consumed as
 	// whole events, not re-split on byte boundaries.
-	framed := p.output == tr.FormatOpenAI && sseStream(resp.Headers)
+	//
+	// The predicate mirrors the kit's Passthrough decision
+	// (openAIOutputFormat + isSSEStream) on this same request object: the
+	// resolved output can differ (an empty request Format falls back to the
+	// input format) and a missing upstream Content-Type still means SSE.
+	framed := openAIOutputFormat(r.Format) && sseStream(resp.Headers)
 	out := make(chan pluginapi.ExecutorStreamChunk)
 	go func() {
 		defer close(out)
@@ -281,14 +286,18 @@ func (e *executor) ExecuteStream(ctx context.Context, r pluginapi.ExecutorReques
 			}
 		}
 		if p.native == p.output {
-			// In framed mode the kit delivers one complete JSON event per
-			// chunk with no line terminators (bare JSON on chat routes,
-			// "data:"-framed elsewhere) and drops the upstream [DONE]
-			// marker. Forward each chunk as a complete SSE event so
-			// clients can parse the relayed stream, and track OpenAI
-			// completion from the per-choice finish reasons: a close
-			// before every choice finishes is a truncation, not a clean
-			// end, mirroring the translated path's stream_truncated.
+			// In framed mode the kit delivers one complete event per chunk,
+			// already shaped for the host: bare JSON on OpenAI
+			// chat/completions routes (the handler writes each chunk as
+			// "data: %s" and appends its own [DONE]), "data:"-framed
+			// elsewhere. Forward verbatim: re-framing here would
+			// double-wrap ("data: data: …") and a re-emitted [DONE]
+			// would precede the handler's own terminator. Finish reasons
+			// are still tracked because the kit drops the upstream
+			// [DONE]: a close before every choice finishes is a
+			// truncation, not a clean end, mirroring the translated
+			// path's stream_truncated. Error chunks carry no payload;
+			// framing a nil payload would emit a bogus empty data event.
 			completion := newOpenAICompletion()
 			for {
 				select {
@@ -296,25 +305,19 @@ func (e *executor) ExecuteStream(ctx context.Context, r pluginapi.ExecutorReques
 					return
 				case chunk, ok := <-resp.Chunks:
 					if !ok {
-						if framed {
-							if !completion.done() {
-								send(nil, truncatedStream())
-								return
-							}
-							send([]byte("data: [DONE]\n\n"), nil)
+						if framed && !completion.done() {
+							send(nil, truncatedStream())
 						}
 						return
 					}
-					if framed {
-						if chunk.Err == nil {
-							completion.observe(chunk.Payload)
-						}
-						if !send(sseFrame(chunk.Payload), chunk.Err) || chunk.Err != nil {
-							return
-						}
-						continue
+					if chunk.Err != nil {
+						send(nil, chunk.Err)
+						return
 					}
-					if !send(chunk.Payload, chunk.Err) || chunk.Err != nil {
+					if framed {
+						completion.observe(chunk.Payload)
+					}
+					if !send(chunk.Payload, nil) {
 						return
 					}
 				}
@@ -432,7 +435,18 @@ func invalidStream() *pluginabi.Error {
 	return &pluginabi.Error{Code: "invalid_stream", Message: "upstream SSE event exceeds maximum size", HTTPStatus: 502}
 }
 func sseStream(h http.Header) bool {
-	return strings.Contains(strings.ToLower(h.Get("Content-Type")), "text/event-stream")
+	ct := h.Get("Content-Type")
+	if ct == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(ct), "text/event-stream")
+}
+
+// openAIOutputFormat mirrors the kit's Passthrough framing predicate: the
+// host sets Format to the plugin's own declared output format, and an empty
+// format keeps the historical OpenAI assumption for direct callers.
+func openAIOutputFormat(format string) bool {
+	return format == "" || tr.Format(format) == tr.FormatOpenAI
 }
 func (*executor) CountTokens(ctx context.Context, r pluginapi.ExecutorRequest) (pluginapi.ExecutorResponse, error) {
 	return (kit.Passthrough{}).CountTokens(ctx, r)

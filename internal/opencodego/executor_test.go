@@ -332,6 +332,115 @@ func clientRequest(format, id string, stream bool) pluginapi.ExecutorRequest {
 	return pluginapi.ExecutorRequest{Model: model, SourceFormat: format, Format: format, Stream: stream, Payload: raw, StorageJSON: []byte(`{"api_key":"example-key"}`)}
 }
 
+// Regression (Devin Review on TWO-683): in framed mode the kit delivers one
+// complete JSON event per chunk with no line terminators, so the
+// same-protocol relay must re-frame each chunk into a complete SSE event.
+// Table covers both kit chunk shapes: "data:"-framed (no request_path
+// metadata) and bare JSON (chat route metadata).
+func TestSameProtocolRelayEmitsParseableSSE(t *testing.T) {
+	upstream := "data: {\"id\":\"chat-example\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chat-example\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+	for name, metadata := range map[string]map[string]any{
+		"framed": {},
+		"bare":   {"request_path": "/v1/chat/completions"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == "GET" {
+					w.WriteHeader(503)
+					return
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				io.WriteString(w, upstream)
+			}))
+			defer s.Close()
+			ex := newExecutor(newCatalog(s.URL, nil))
+			req := clientRequest("openai", "glm-5.3", true)
+			req.HTTPClient = testHTTP{s.Client()}
+			req.Metadata = metadata
+			resp, err := ex.ExecuteStream(context.Background(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out strings.Builder
+			for c := range resp.Chunks {
+				if c.Err != nil {
+					t.Fatal(c.Err)
+				}
+				out.Write(c.Payload)
+			}
+			raw := out.String()
+			var events []string
+			for _, block := range strings.Split(raw, "\n\n") {
+				if block = strings.TrimSpace(block); block != "" {
+					events = append(events, block)
+				}
+			}
+			if len(events) != 3 {
+				t.Fatalf("want 3 SSE events, got %d: %q", len(events), raw)
+			}
+			for _, ev := range events {
+				if !strings.HasPrefix(ev, "data:") {
+					t.Fatalf("event is not a complete SSE event: %q", ev)
+				}
+			}
+			if !strings.Contains(events[0], `"content":"hello"`) || events[2] != "data: [DONE]" {
+				t.Fatalf("content/terminal events wrong: %q", raw)
+			}
+		})
+	}
+}
+
+// Regression (Devin Review on TWO-683): a same-protocol close before every
+// choice finishes is a truncation (stream_truncated, no [DONE]); a close
+// after complete choices keeps the terminal marker, mirroring the
+// translated path.
+func TestSameProtocolRelayRejectsTruncation(t *testing.T) {
+	complete := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
+	cut := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n"
+	for _, tc := range []struct {
+		name    string
+		upstream string
+		wantErr bool
+	}{
+		{"cut mid-choice", cut, true},
+		{"cut after finish", complete, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == "GET" {
+					w.WriteHeader(503)
+					return
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				io.WriteString(w, tc.upstream)
+			}))
+			defer s.Close()
+			ex := newExecutor(newCatalog(s.URL, nil))
+			req := clientRequest("openai", "glm-5.3", true)
+			req.HTTPClient = testHTTP{s.Client()}
+			resp, err := ex.ExecuteStream(context.Background(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out strings.Builder
+			failed := false
+			for c := range resp.Chunks {
+				if c.Err != nil {
+					failed = true
+					continue
+				}
+				out.Write(c.Payload)
+			}
+			if failed != tc.wantErr {
+				t.Fatalf("truncation error = %v, want %v (output %q)", failed, tc.wantErr, out.String())
+			}
+			if strings.Contains(out.String(), "[DONE]") == tc.wantErr {
+				t.Fatalf("terminal marker wrong for truncated=%v: %q", tc.wantErr, out.String())
+			}
+		})
+	}
+}
+
 func TestTranslatedStreamRejectsTruncationAndOversizedEvents(t *testing.T) {
 	for _, raw := range []string{
 		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n",

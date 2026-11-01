@@ -37,7 +37,9 @@ func TestModelNamespaceConformance(t *testing.T) {
 		if r.URL.Path != "/inference/go/v1/models" {
 			t.Error("wrong discovery request")
 		}
-		fmt.Fprint(w, `{"data":[{"id":"glm-5.3-flash","protocol":"openai"},{"id":"minimax-m3","api":{"npm":"@ai-sdk/anthropic"}}]}`)
+		// conformance-probe-only is absent from the static snapshot, so it
+		// exercises the dynamic discovery path (explicit protocol metadata).
+		fmt.Fprint(w, `{"data":[{"id":"glm-5.3-flash","protocol":"openai"},{"id":"minimax-m3","api":{"npm":"@ai-sdk/anthropic"}},{"id":"conformance-probe-only","protocol":"openai"}]}`)
 	}))
 	defer s.Close()
 	discovered, err := newCatalog(s.URL, nil).ModelsForAuth(ctx, pluginapi.AuthModelRequest{AuthID: "one", StorageJSON: []byte(`{"api_key":"example-key"}`)})

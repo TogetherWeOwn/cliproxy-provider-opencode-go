@@ -2,7 +2,6 @@ package opencodego
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -108,7 +107,7 @@ func (c *catalog) load(ctx context.Context, storage []byte, metadata map[string]
 	if err != nil {
 		return nil, err
 	}
-	digest := sha256.Sum256([]byte(key))
+	digest := credentialDigest(key)
 	c.mu.Lock()
 	entry, ok := c.cache[digest]
 	c.mu.Unlock()

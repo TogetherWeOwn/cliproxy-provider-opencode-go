@@ -49,20 +49,18 @@ func newQuotaWithClient(base func() string, client *kit.QuotaHTTPClient) *kit.Ca
 		// fails when no window is usable; the empty check below is defense
 		// for future callers.
 		buckets := make([]pluginapi.QuotaBucket, 0, 3)
-		summary := make([]pluginapi.QuotaMetric, 0, 3)
 		for _, item := range []struct {
 			name   string
 			window usageWindow
-		}{{"5h", snap.FiveHour}, {"weekly", snap.Weekly}, {"monthly", snap.Monthly}} {
+		}{{kit.CardWindowFiveHour, snap.FiveHour}, {kit.CardWindowWeekly, snap.Weekly}, {kit.CardWindowMonthly, snap.Monthly}} {
 			if !item.window.Valid {
 				continue
 			}
 			buckets = append(buckets, pluginapi.QuotaBucket{Window: item.name, RemainingFraction: 1 - item.window.Utilization, ResetTime: item.window.ResetAt.Format(time.RFC3339)})
-			summary = append(summary, pluginapi.QuotaMetric{Key: "usage_percent_" + item.name, Label: "Usage percent " + item.name, Value: item.window.Utilization * 100, Unit: "percent", Format: "number"})
 		}
 		if len(buckets) == 0 {
 			return pluginapi.QuotaFetchResponse{}, &pluginabi.Error{Code: "invalid_quota", Message: "invalid quota response", HTTPStatus: 502}
 		}
-		return pluginapi.QuotaFetchResponse{Summary: summary, Groups: []pluginapi.QuotaGroup{{DisplayName: "OpenCode Go", Buckets: buckets}}}, nil
+		return pluginapi.QuotaFetchResponse{Groups: []pluginapi.QuotaGroup{{DisplayName: "OpenCode Go", Buckets: buckets}}}, nil
 	})
 }

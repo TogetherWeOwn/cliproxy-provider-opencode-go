@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	kit "github.com/TogetherWeOwn/cliproxy-provider-kit"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
@@ -38,7 +39,9 @@ func TestQuotaProviderUsesQuotaKeyAndNormalizes(t *testing.T) {
 	}
 }
 
-func TestQuotaProviderEmitsSummaryMetrics(t *testing.T) {
+// The card carries no summary metrics: usage percent repeats the bars, so
+// the unreleased used-% summary stays out of the emitted shape.
+func TestQuotaProviderOmitsSummaryMetrics(t *testing.T) {
 	now := time.Now().UTC()
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, usageFixture(usageWindowFixture("ok", 42, now.Add(time.Hour)), usageWindowFixture("rate-limited", 0, now.Add(24*time.Hour)), usageWindowFixture("ok", 5, now.Add(30*24*time.Hour))))
@@ -49,15 +52,21 @@ func TestQuotaProviderEmitsSummaryMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]float64{"usage_percent_5h": 42, "usage_percent_weekly": 100, "usage_percent_monthly": 5}
-	if len(got.Summary) != len(want) {
-		t.Fatalf("summary = %+v, want %d metrics", got.Summary, len(want))
+	if len(got.Summary) != 0 {
+		t.Fatalf("summary = %+v, want no summary metrics", got.Summary)
 	}
-	for _, metric := range got.Summary {
-		value, ok := want[metric.Key]
-		if !ok || math.Abs(metric.Value-value) > 1e-9 || metric.Unit != "percent" || metric.Format != "number" || metric.Label == "" {
-			t.Fatalf("unexpected summary metric: %+v", metric)
+	wantWindows := []string{kit.CardWindowFiveHour, kit.CardWindowWeekly, kit.CardWindowMonthly}
+	if len(got.Groups) != 1 || len(got.Groups[0].Buckets) != len(wantWindows) {
+		t.Fatalf("quota = %+v, want 3 buckets", got)
+	}
+	for i, window := range wantWindows {
+		bucket := got.Groups[0].Buckets[i]
+		if bucket.Window != window || bucket.Description != "" {
+			t.Fatalf("bucket %d = %+v, want window %q with no description", i, bucket, window)
 		}
+	}
+	if violations := kit.CheckCard(got); len(violations) != 0 {
+		t.Fatalf("CheckCard violations: %v", violations)
 	}
 }
 
@@ -78,17 +87,12 @@ func TestQuotaProviderDropsOnlyMalformedWindow(t *testing.T) {
 		t.Fatalf("buckets = %+v, want weekly + monthly only", got.Groups)
 	}
 	for _, bucket := range got.Groups[0].Buckets {
-		if bucket.Window == "5h" || bucket.ResetTime == "" {
+		if bucket.Window == kit.CardWindowFiveHour || bucket.ResetTime == "" {
 			t.Fatalf("unexpected bucket: %+v", bucket)
 		}
 	}
-	if len(got.Summary) != 2 {
-		t.Fatalf("summary = %+v, want 2 metrics", got.Summary)
-	}
-	for _, metric := range got.Summary {
-		if metric.Key == "usage_percent_5h" {
-			t.Fatalf("dropped window still has a metric: %+v", metric)
-		}
+	if len(got.Summary) != 0 {
+		t.Fatalf("summary = %+v, want no summary metrics", got.Summary)
 	}
 }
 

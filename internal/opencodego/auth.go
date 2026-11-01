@@ -38,8 +38,21 @@ type proxyAuth struct {
 	owners  map[[32]byte]string
 }
 
-func newProxyAuth(catalog *catalog) *proxyAuth {
-	return &proxyAuth{APIKeyAuth: newAuth(), catalog: catalog, files: make(map[string][32]byte), owners: make(map[[32]byte]string)}
+func newProxyAuth(catalog *catalog) (*proxyAuth, error) {
+	a := &proxyAuth{APIKeyAuth: newAuth(), catalog: catalog, files: make(map[string][32]byte), owners: make(map[[32]byte]string)}
+	login, err := kit.NewAPIKeyLogin(kit.APIKeyLoginConfig{
+		Provider: "opencode-go",
+		Parse:    a.ParseAuth,
+		Fields: []kit.APIKeyLoginField{
+			{Name: "quota_api_key", Label: "Quota API key", Description: "Optional separate key for quota polling. Leave blank to skip.", Required: false},
+			{Name: "workspace", Label: "Workspace", Description: "Optional workspace. Leave blank to skip.", Required: false},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	a.APIKeyAuth.Login = login
+	return a, nil
 }
 
 func (a *proxyAuth) ParseAuth(ctx context.Context, r pluginapi.AuthParseRequest) (pluginapi.AuthParseResponse, error) {

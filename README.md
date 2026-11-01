@@ -42,13 +42,23 @@ These are placeholders, not usable credentials:
 
 Use mode `0600`. `quota_api_key` is optional and defaults to `api_key`.
 New Console keys normally begin `oc_sk_`; legacy `sk-` keys may also work.
-Console device OAuth is not the Go API-key flow. Login/poll operations return an
-API-key-only error; refresh preserves the key. IDs are stable
+Console device OAuth is not the Go API-key flow; see Management-UI login
+below. Refresh preserves the key. IDs are stable
 `opencode-go:<first 12 hex SHA256 characters of api_key>` unless an explicit
 `id` is supplied. `prefix`, `proxy_url`, and the host's routing fields are
 preserved. Model discovery and quota polls go through the auth's
 `proxy_url`, else the host's global `proxy-url`, like inference does. Optional `workspace` is metadata only, never an HTTP path or scraping
 input. No browser sessions or dashboard scraping are used.
+
+## Management-UI login
+
+The management UI's **Start OpenCode Go Login** card serves a kit login page
+that prompts for the API key and the optional `quota_api_key` and `workspace`
+fields, then submits them over an authenticated management POST (secrets travel
+in the POST body only, never in URLs, logs or process arguments). The
+submission runs the same ParseAuth validation and duplicate-key guard as an
+uploaded auth file. Blank optional fields are skipped. On a remote host, set
+`CLIPROXY_BASE` to an `https://` base so secrets are encrypted in transit.
 
 ## Models and protocols
 

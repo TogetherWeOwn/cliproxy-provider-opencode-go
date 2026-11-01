@@ -48,8 +48,10 @@ func newQuotaWithClient(base func() string, client *kit.QuotaHTTPClient) *kit.Ca
 		// dropped, never reported as zeroed data. parseUsageResponse already
 		// fails when no window is usable; the empty check below is defense
 		// for future callers.
+		// Utilization is visible as the bar fill; a per-window usage chip
+		// would only repeat the bar, so buckets carry no Description and the
+		// card shows no summary.
 		buckets := make([]pluginapi.QuotaBucket, 0, 3)
-		summary := make([]pluginapi.QuotaMetric, 0, 3)
 		for _, item := range []struct {
 			name   string
 			window usageWindow
@@ -57,12 +59,11 @@ func newQuotaWithClient(base func() string, client *kit.QuotaHTTPClient) *kit.Ca
 			if !item.window.Valid {
 				continue
 			}
-			buckets = append(buckets, pluginapi.QuotaBucket{Window: item.name, RemainingFraction: 1 - item.window.Utilization, ResetTime: item.window.ResetAt.Format(time.RFC3339)})
-			summary = append(summary, pluginapi.QuotaMetric{Key: "usage_percent_" + item.name, Label: "Usage percent " + item.name, Value: item.window.Utilization * 100, Unit: "percent", Format: "number"})
+			buckets = append(buckets, kit.NewQuotaBucket(item.name, 1-item.window.Utilization, item.window.ResetAt.Format(time.RFC3339)))
 		}
 		if len(buckets) == 0 {
 			return pluginapi.QuotaFetchResponse{}, &pluginabi.Error{Code: "invalid_quota", Message: "invalid quota response", HTTPStatus: 502}
 		}
-		return pluginapi.QuotaFetchResponse{Summary: summary, Groups: []pluginapi.QuotaGroup{{DisplayName: "OpenCode Go", Buckets: buckets}}}, nil
+		return pluginapi.QuotaFetchResponse{Groups: []pluginapi.QuotaGroup{{DisplayName: "OpenCode Go", Buckets: buckets}}}, nil
 	})
 }

@@ -69,31 +69,69 @@ func TestParseUsageResponsePercentHundredSetsLimitReached(t *testing.T) {
 	}
 }
 
-func TestParseUsageResponseRejectsMalformedIncompleteAndOutOfRange(t *testing.T) {
+func TestParseUsageResponseRejectsMalformedPayloads(t *testing.T) {
 	validFive := usageWindowFixture("ok", 42, usageObservedAt.Add(time.Hour))
 	validWeekly := usageWindowFixture("ok", 10, usageObservedAt.Add(7*24*time.Hour))
 	validMonthly := usageWindowFixture("ok", 5, usageObservedAt.Add(30*24*time.Hour))
-	tests := []struct {
+	for _, tt := range []struct {
 		name string
 		raw  string
 	}{
 		{name: "malformed", raw: `{`},
 		{name: "trailing bytes", raw: usageFixture(validFive, validWeekly, validMonthly) + `garbage`},
-		{name: "unrecognized status", raw: usageFixture(usageWindowFixture("unknown", 1, usageObservedAt.Add(time.Hour)), validWeekly, validMonthly)},
-		{name: "missing percent", raw: strings.Replace(usageFixture(validFive, validWeekly, validMonthly), `,"percent":42`, ``, 1)},
-		{name: "percent negative", raw: strings.Replace(usageFixture(validFive, validWeekly, validMonthly), `"percent":42`, `"percent":-1`, 1)},
-		{name: "percent over 100", raw: strings.Replace(usageFixture(validFive, validWeekly, validMonthly), `"percent":42`, `"percent":101`, 1)},
-		{name: "missing resetsAt", raw: strings.Replace(usageFixture(validFive, validWeekly, validMonthly), usageObservedAt.Add(time.Hour).Format(time.RFC3339), "", 1)},
-		{name: "unparseable resetsAt", raw: strings.Replace(usageFixture(validFive, validWeekly, validMonthly), usageObservedAt.Add(time.Hour).Format(time.RFC3339), "not-a-time", 1)},
-		{name: "resetsAt too far future", raw: strings.Replace(usageFixture(validFive, validWeekly, validMonthly), usageObservedAt.Add(time.Hour).Format(time.RFC3339), usageObservedAt.Add(maxResetFuture+time.Hour).Format(time.RFC3339), 1)},
-		{name: "resetsAt not after observedAt for non-exhausted", raw: strings.Replace(usageFixture(validFive, validWeekly, validMonthly), usageObservedAt.Add(time.Hour).Format(time.RFC3339), usageObservedAt.Format(time.RFC3339), 1)},
-	}
-	for _, tt := range tests {
+	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if _, err := parseUsageResponse([]byte(tt.raw), usageObservedAt); err == nil {
 				t.Fatal("invalid usage payload succeeded")
 			}
 		})
+	}
+}
+
+// A single malformed window is dropped while the healthy windows survive;
+// only a payload with no usable window at all fails.
+func TestParseUsageResponseToleratesSingleBadWindow(t *testing.T) {
+	validFive := usageWindowFixture("ok", 42, usageObservedAt.Add(time.Hour))
+	validWeekly := usageWindowFixture("ok", 10, usageObservedAt.Add(7*24*time.Hour))
+	validMonthly := usageWindowFixture("ok", 5, usageObservedAt.Add(30*24*time.Hour))
+	full := usageFixture(validFive, validWeekly, validMonthly)
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "unrecognized status", raw: usageFixture(usageWindowFixture("unknown", 1, usageObservedAt.Add(time.Hour)), validWeekly, validMonthly)},
+		{name: "missing percent", raw: strings.Replace(full, `,"percent":42`, ``, 1)},
+		{name: "percent negative", raw: strings.Replace(full, `"percent":42`, `"percent":-1`, 1)},
+		{name: "percent over 100", raw: strings.Replace(full, `"percent":42`, `"percent":101`, 1)},
+		{name: "missing resetsAt", raw: strings.Replace(full, usageObservedAt.Add(time.Hour).Format(time.RFC3339), "", 1)},
+		{name: "unparseable resetsAt", raw: strings.Replace(full, usageObservedAt.Add(time.Hour).Format(time.RFC3339), "not-a-time", 1)},
+		{name: "resetsAt too far future", raw: strings.Replace(full, usageObservedAt.Add(time.Hour).Format(time.RFC3339), usageObservedAt.Add(maxResetFuture+time.Hour).Format(time.RFC3339), 1)},
+		{name: "resetsAt not after observedAt for non-exhausted", raw: strings.Replace(full, usageObservedAt.Add(time.Hour).Format(time.RFC3339), usageObservedAt.Format(time.RFC3339), 1)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			snapshot, err := parseUsageResponse([]byte(tt.raw), usageObservedAt)
+			if err != nil {
+				t.Fatalf("tolerable payload failed: %v", err)
+			}
+			if snapshot.FiveHour.Valid {
+				t.Fatalf("bad rolling window kept: %#v", snapshot.FiveHour)
+			}
+			if !snapshot.Weekly.Valid || !snapshot.Monthly.Valid {
+				t.Fatalf("healthy windows dropped: %#v", snapshot)
+			}
+			if snapshot.Weekly.Utilization != 0.10 || snapshot.Monthly.Utilization != 0.05 {
+				t.Fatalf("healthy windows changed: %#v", snapshot)
+			}
+		})
+	}
+}
+
+func TestParseUsageResponseRejectsPayloadWithNoUsableWindow(t *testing.T) {
+	bad := usageWindowFixture("unknown", 1, usageObservedAt.Add(time.Hour))
+	raw := usageFixture(bad, bad, bad)
+	if _, err := parseUsageResponse([]byte(raw), usageObservedAt); err == nil {
+		t.Fatal("payload with no usable window succeeded")
 	}
 }
 

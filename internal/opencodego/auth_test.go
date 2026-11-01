@@ -2,9 +2,12 @@ package opencodego
 
 import (
 	"context"
-	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
 func TestAuthValidationAndStableIdentity(t *testing.T) {
@@ -23,5 +26,34 @@ func TestAuthValidationAndStableIdentity(t *testing.T) {
 		if err == nil {
 			t.Errorf("invalid field accepted: %s", field)
 		}
+	}
+}
+
+func TestProxyAuthRejectsDuplicateKeyAcrossFiles(t *testing.T) {
+	c := newCatalog("http://opencode.invalid", nil)
+	defer c.client.CloseIdleConnections()
+	auth := newProxyAuth(c)
+	raw := []byte(`{"type":"opencode-go","api_key":"shared-key"}`)
+	first, err := auth.ParseAuth(context.Background(), pluginapi.AuthParseRequest{RawJSON: raw, FileName: "one.json"})
+	if err != nil || !first.Handled {
+		t.Fatalf("first parse %+v %v", first, err)
+	}
+	// Re-parsing the same file (for example on a host watcher rescan) stays valid.
+	if _, err := auth.ParseAuth(context.Background(), pluginapi.AuthParseRequest{RawJSON: raw, FileName: "one.json"}); err != nil {
+		t.Fatalf("same-file re-parse rejected: %v", err)
+	}
+	// The same key in a different file is a duplicate account.
+	_, err = auth.ParseAuth(context.Background(), pluginapi.AuthParseRequest{RawJSON: raw, FileName: "two.json"})
+	var dup *pluginabi.Error
+	if err == nil || !errors.As(err, &dup) || dup.Code != "duplicate_auth" {
+		t.Fatalf("duplicate key accepted: %v", err)
+	}
+	// Rotating the key in the original file releases the old digest.
+	rotated := []byte(`{"type":"opencode-go","api_key":"rotated-key"}`)
+	if _, err := auth.ParseAuth(context.Background(), pluginapi.AuthParseRequest{RawJSON: rotated, FileName: "one.json"}); err != nil {
+		t.Fatalf("rotation rejected: %v", err)
+	}
+	if _, err := auth.ParseAuth(context.Background(), pluginapi.AuthParseRequest{RawJSON: raw, FileName: "two.json"}); err != nil {
+		t.Fatalf("released key still owned: %v", err)
 	}
 }

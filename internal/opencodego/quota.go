@@ -27,7 +27,10 @@ type httpDoer interface {
 
 // usageWindow is one parsed zen/go usage window: real utilization and a
 // real reset time, or nothing at all -- this package never fabricates one.
+// Valid is false when the upstream window was missing or malformed; callers
+// must drop invalid windows instead of reporting zeroed data.
 type usageWindow struct {
+	Valid        bool
 	Utilization  float64
 	LimitReached bool
 	ResetAt      time.Time
@@ -140,19 +143,30 @@ func parseUsageResponse(raw []byte, observedAt time.Time) (usageSnapshot, error)
 	}
 
 	observedAt = observedAt.UTC()
-	fiveHour, err := parseUsageWindow(response.Usage.Rolling, observedAt)
-	if err != nil {
-		return usageSnapshot{}, fmt.Errorf("rolling window: %w", err)
+	// Per-window tolerance: one malformed window must not discard the
+	// others. Only a payload with no usable window at all fails.
+	windows := []struct {
+		name string
+		wire usageWireWindow
+	}{
+		{"rolling", response.Usage.Rolling},
+		{"weekly", response.Usage.Weekly},
+		{"monthly", response.Usage.Monthly},
 	}
-	weekly, err := parseUsageWindow(response.Usage.Weekly, observedAt)
-	if err != nil {
-		return usageSnapshot{}, fmt.Errorf("weekly window: %w", err)
+	parsed := make([]usageWindow, len(windows))
+	var failures []string
+	for i, window := range windows {
+		parsedWindow, err := parseUsageWindow(window.wire, observedAt)
+		if err != nil {
+			failures = append(failures, window.name+": "+err.Error())
+			continue
+		}
+		parsed[i] = parsedWindow
 	}
-	monthly, err := parseUsageWindow(response.Usage.Monthly, observedAt)
-	if err != nil {
-		return usageSnapshot{}, fmt.Errorf("monthly window: %w", err)
+	if len(failures) == len(windows) {
+		return usageSnapshot{}, fmt.Errorf("no usable quota window (%s)", strings.Join(failures, "; "))
 	}
-	return usageSnapshot{FiveHour: fiveHour, Weekly: weekly, Monthly: monthly, ObservedAt: observedAt}, nil
+	return usageSnapshot{FiveHour: parsed[0], Weekly: parsed[1], Monthly: parsed[2], ObservedAt: observedAt}, nil
 }
 
 func parseUsageWindow(wire usageWireWindow, observedAt time.Time) (usageWindow, error) {
@@ -190,7 +204,7 @@ func parseUsageWindow(wire usageWireWindow, observedAt time.Time) (usageWindow, 
 		return usageWindow{}, fmt.Errorf("resetsAt is not after observedAt for a non-exhausted window")
 	}
 
-	return usageWindow{Utilization: utilization, LimitReached: limitReached, ResetAt: resetAt}, nil
+	return usageWindow{Valid: true, Utilization: utilization, LimitReached: limitReached, ResetAt: resetAt}, nil
 }
 
 const maxResetFuture = 35 * 24 * time.Hour

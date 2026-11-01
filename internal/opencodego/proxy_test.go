@@ -64,7 +64,7 @@ func TestExecutorDiscoveryUsesHostProxyFromAuthParse(t *testing.T) {
 	hostProxy, seen := newProxyRecorder(t, `{"data":[{"id":"glm-5.3","protocol":"openai"}]}`)
 	c := newCatalog("http://opencode.invalid", nil)
 	defer c.client.CloseIdleConnections()
-	auth := proxyAuth{newAuth(), c}
+	auth := newProxyAuth(c)
 	parsed, err := auth.ParseAuth(context.Background(), pluginapi.AuthParseRequest{RawJSON: []byte(`{"type":"opencode-go","api_key":"key"}`), Host: pluginapi.HostConfigSummary{ProxyURL: hostProxy.URL}})
 	if err != nil || !parsed.Handled {
 		t.Fatal(parsed, err)

@@ -20,14 +20,14 @@ func TestRegistryAcceptedByPinnedHostStore(t *testing.T) {
 		t.Fatal("expected one provider plugin")
 	}
 	plugin := registry.Plugins[0]
-	if plugin.ID != "opencode-go" || plugin.Version != "0.2.1" || pluginstore.PluginInstallType(plugin) != "github-release" {
+	if plugin.ID != "opencode-go" || plugin.Version != "0.2.2" || pluginstore.PluginInstallType(plugin) != "github-release" {
 		t.Fatal("wrong release identity")
 	}
 	name := pluginstore.ArchiveName(plugin.ID, plugin.Version, "linux", "amd64")
-	if name != "opencode-go_0.2.1_linux_amd64.zip" {
+	if name != "opencode-go_0.2.2_linux_amd64.zip" {
 		t.Fatalf("unexpected host asset %s", name)
 	}
-	_, _, err = pluginstore.SelectReleaseAssets(pluginstore.Release{TagName: "v0.2.1", Assets: []pluginstore.ReleaseAsset{{Name: name}, {Name: "checksums.txt"}}}, plugin.ID, plugin.Version, "linux", "amd64")
+	_, _, err = pluginstore.SelectReleaseAssets(pluginstore.Release{TagName: "v0.2.2", Assets: []pluginstore.ReleaseAsset{{Name: name}, {Name: "checksums.txt"}}}, plugin.ID, plugin.Version, "linux", "amd64")
 	if err != nil {
 		t.Fatal(err)
 	}

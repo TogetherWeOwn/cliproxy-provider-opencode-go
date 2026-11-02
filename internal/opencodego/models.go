@@ -19,6 +19,9 @@ import (
 )
 
 const provider = "opencode-go"
+
+const displayName = "OpenCode Go"
+
 const modelPrefix = "opencode-go/"
 const upstreamBase = "https://opencode.ai"
 const catalogTTL = time.Minute

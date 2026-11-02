@@ -27,12 +27,16 @@ func TestRuntimeRegistersNativeProviderCapabilitiesWithoutScheduler(t *testing.T
 	if err := json.Unmarshal(envelope.Result, &result); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"auth_provider", "quota_provider", "executor", "model_provider", "model_registrar"} {
+	for _, name := range []string{"quota_provider", "executor", "model_provider", "model_registrar"} {
 		if result.Capabilities[name] != true {
 			t.Errorf("missing capability %s: %+v", name, result.Capabilities)
 		}
 	}
-	if result.Capabilities["scheduler"] == true {
-		t.Fatal("native selection must not be replaced")
+	// API-key only (TWO-1257): no AuthProvider and no ManagementAPI login
+	// routes, so the panel shows no login card.
+	for _, name := range []string{"auth_provider", "management_api", "scheduler"} {
+		if result.Capabilities[name] == true {
+			t.Errorf("unexpected capability %s: %+v", name, result.Capabilities)
+		}
 	}
 }

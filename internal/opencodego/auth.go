@@ -2,7 +2,6 @@ package opencodego
 
 import (
 	"context"
-	"time"
 
 	kit "github.com/TogetherWeOwn/cliproxy-provider-kit"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
@@ -22,52 +21,37 @@ func newAuth() kit.APIKeyAuth {
 	}}
 }
 
-// proxyAuth records the host's global proxy-url from every auth parse and
-// refresh. An auth is parsed before it can execute, so catalog discovery on
-// the executor path has the host proxy even before any ModelsForAuth call.
+// proxyAuth learns the host's global proxy-url from auth parses and refreshes
+// that carry host configuration, and from ModelsForAuth on the executor path,
+// so catalog discovery has the host proxy even before execution. A re-parse
+// without host configuration never clears the learned proxy.
 //
 // It also guards against the same API key being configured in two auth
 // files through kit.KeyOwnership: ownership is by filename, so a watcher's
-// repeated parse of one file is safe, and a provisional login-validation
-// parse only reserves the digest until the login session expires, so an
-// abandoned login releases the key instead of holding it until restart.
-// Only credentialDigest values are retained; keys never appear in duplicate
-// errors and digests are useless across restarts.
+// repeated parse of one file is safe. Only credentialDigest values are
+// retained; keys never appear in duplicate errors and digests are useless
+// across restarts.
+//
+// The provider is API-key only: it registers no AuthProvider, so the
+// management UI shows no login card and auth files load through the host's
+// generic file path. ParseAuth stays as the documented auth-file
+// validation (field shapes, duplicate-key guard) beside the JSON shape in the
+// README; re-register it as the plugin AuthProvider to restore upload-time
+// validation.
 type proxyAuth struct {
 	kit.APIKeyAuth
 	catalog *catalog
 	guard   kit.KeyOwnership
 }
 
-func newProxyAuth(catalog *catalog) (*proxyAuth, error) {
-	return newProxyAuthWithLoginTTL(catalog, 0)
-}
-
-// newProxyAuthWithLoginTTL is newProxyAuth with an explicit login session
-// TTL (zero keeps the kit default); tests use a short TTL to observe an
-// abandoned login releasing its key reservation.
-func newProxyAuthWithLoginTTL(catalog *catalog, loginTTL time.Duration) (*proxyAuth, error) {
-	a := &proxyAuth{APIKeyAuth: newAuth(), catalog: catalog}
-	login, err := kit.NewAPIKeyLogin(kit.APIKeyLoginConfig{
-		Provider:   "opencode-go",
-		Parse:      a.ParseAuth,
-		SessionTTL: loginTTL,
-		Fields: []kit.APIKeyLoginField{
-			{Name: "quota_api_key", Label: "Quota API key", Description: "Optional separate key for quota polling. Leave blank to skip.", Required: false, Secret: true},
-			{Name: "workspace", Label: "Workspace", Description: "Optional workspace. Leave blank to skip.", Required: false},
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-	a.APIKeyAuth.Login = login
-	return a, nil
+func newProxyAuth(catalog *catalog) *proxyAuth {
+	return &proxyAuth{APIKeyAuth: newAuth(), catalog: catalog}
 }
 
 func (a *proxyAuth) ParseAuth(ctx context.Context, r pluginapi.AuthParseRequest) (pluginapi.AuthParseResponse, error) {
-	// The kit login submit re-parses the key without host configuration, so
-	// only a configured proxy replaces the shared one: a login must never
-	// clear the host proxy that earlier parses learned.
+	// A re-parse may carry no host configuration, so only a configured proxy
+	// replaces the shared one: it must never clear the host proxy that
+	// earlier parses learned.
 	if r.Host.ProxyURL != "" {
 		a.catalog.setHostProxy(r.Host.ProxyURL)
 	}

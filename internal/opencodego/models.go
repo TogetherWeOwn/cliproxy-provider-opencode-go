@@ -79,11 +79,12 @@ func (c *catalog) RegisterModels(context.Context, pluginapi.ModelRegistrationReq
 func (c *catalog) StaticModels(_ context.Context, r pluginapi.StaticModelRequest) (pluginapi.ModelResponse, error) {
 	// Prime the shared host proxy before any execution: the executor has no
 	// host configuration, so without this a first static-model request would
-	// run discovery without the host's global proxy. Never clear a proxy that
-	// an earlier call learned.
-	if r.Host.ProxyURL != "" {
-		c.setHostProxy(r.Host.ProxyURL)
-	}
+	// run discovery without the host's global proxy. The host always sends
+	// its current configuration here, so an empty ProxyURL is an explicit
+	// proxy-free configuration and clears a previously learned value,
+	// mirroring ModelsForAuth. (ParseAuth keeps its never-clear guard
+	// because a re-parse may carry no host configuration at all.)
+	c.setHostProxy(r.Host.ProxyURL)
 	return pluginapi.ModelResponse{Provider: provider, Models: modelList(staticRoutes())}, nil
 }
 func (c *catalog) setHostProxy(proxyURL string) { c.hostProxy.Store(&proxyURL) }

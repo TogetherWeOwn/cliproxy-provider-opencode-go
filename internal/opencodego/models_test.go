@@ -144,21 +144,54 @@ func TestInvalidSuccessfulDiscoveryDoesNotSilentlyUseWrongProtocol(t *testing.T)
 
 // The executor carries no host configuration, so static-model discovery must
 // prime the shared host proxy: otherwise a first request before any per-auth
-// discovery would reach upstream without the host's global proxy-url.
-func TestStaticModelsPrimeHostProxy(t *testing.T) {
-	c := newCatalog("http://127.0.0.1:0", nil)
-	if _, err := c.StaticModels(context.Background(), pluginapi.StaticModelRequest{Host: pluginapi.HostConfigSummary{ProxyURL: "http://127.0.0.1:8080"}}); err != nil {
+// discovery would reach upstream without the host's global proxy-url. The
+// host always sends its current configuration here, so a later proxy-free
+// configuration clears the learned value instead of retaining a removed proxy.
+func TestStaticModelsProxyLifecycleRoutesDiscovery(t *testing.T) {
+	for _, v := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+		t.Setenv(v, "")
+	}
+	t.Setenv("NO_PROXY", "*")
+	var upstreamCalls, proxyCalls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls.Add(1)
+		fmt.Fprint(w, `{"data":[{"id":"minimax-m3","protocol":"openai"}]}`)
+	}))
+	defer upstream.Close()
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyCalls.Add(1)
+		// Answer discovery from the proxy itself: reaching this handler
+		// proves the request was routed through the configured proxy.
+		fmt.Fprint(w, `{"data":[{"id":"minimax-m3","protocol":"openai"}]}`)
+	}))
+	defer proxy.Close()
+	c := newCatalog(upstream.URL, nil)
+	if _, err := c.StaticModels(context.Background(), pluginapi.StaticModelRequest{Host: pluginapi.HostConfigSummary{ProxyURL: proxy.URL}}); err != nil {
 		t.Fatal(err)
 	}
-	p := c.hostProxy.Load()
-	if p == nil || *p != "http://127.0.0.1:8080" {
+	if p := c.hostProxy.Load(); p == nil || *p != proxy.URL {
 		t.Fatalf("host proxy not primed: %v", p)
 	}
-	// A host call without proxy configuration must never clear the learned one.
+	route, err := c.resolve(context.Background(), "minimax-m3", []byte(`{"api_key":"lifecycle-key-one"}`), nil)
+	if err != nil || route != "openai" {
+		t.Fatalf("route %q err %v", route, err)
+	}
+	if proxyCalls.Load() != 1 || upstreamCalls.Load() != 0 {
+		t.Fatalf("discovery bypassed the primed proxy: proxy=%d upstream=%d", proxyCalls.Load(), upstreamCalls.Load())
+	}
+	// A proxy-free host configuration clears the learned value: the next
+	// uncached discovery must go direct instead of through the removed proxy.
 	if _, err := c.StaticModels(context.Background(), pluginapi.StaticModelRequest{}); err != nil {
 		t.Fatal(err)
 	}
-	if p := c.hostProxy.Load(); p == nil || *p != "http://127.0.0.1:8080" {
-		t.Fatalf("host proxy cleared: %v", p)
+	if p := c.hostProxy.Load(); p == nil || *p != "" {
+		t.Fatalf("removed proxy still retained: %v", p)
+	}
+	route, err = c.resolve(context.Background(), "minimax-m3", []byte(`{"api_key":"lifecycle-key-two"}`), nil)
+	if err != nil || route != "openai" {
+		t.Fatalf("route %q err %v", route, err)
+	}
+	if proxyCalls.Load() != 1 || upstreamCalls.Load() != 1 {
+		t.Fatalf("discovery did not go direct after removal: proxy=%d upstream=%d", proxyCalls.Load(), upstreamCalls.Load())
 	}
 }

@@ -76,7 +76,14 @@ func modelList(routes map[string]string) []pluginapi.ModelInfo {
 func (c *catalog) RegisterModels(context.Context, pluginapi.ModelRegistrationRequest) (pluginapi.ModelRegistrationResponse, error) {
 	return pluginapi.ModelRegistrationResponse{Provider: provider, Models: modelList(staticRoutes())}, nil
 }
-func (c *catalog) StaticModels(context.Context, pluginapi.StaticModelRequest) (pluginapi.ModelResponse, error) {
+func (c *catalog) StaticModels(_ context.Context, r pluginapi.StaticModelRequest) (pluginapi.ModelResponse, error) {
+	// Prime the shared host proxy before any execution: the executor has no
+	// host configuration, so without this a first static-model request would
+	// run discovery without the host's global proxy. Never clear a proxy that
+	// an earlier call learned.
+	if r.Host.ProxyURL != "" {
+		c.setHostProxy(r.Host.ProxyURL)
+	}
 	return pluginapi.ModelResponse{Provider: provider, Models: modelList(staticRoutes())}, nil
 }
 func (c *catalog) setHostProxy(proxyURL string) { c.hostProxy.Store(&proxyURL) }

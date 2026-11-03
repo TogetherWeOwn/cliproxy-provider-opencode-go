@@ -36,7 +36,6 @@ These are placeholders, not usable credentials:
   "type": "opencode-go",
   "api_key": "example-inference-key",
   "quota_api_key": "example-quota-key",
-  "label": "Example account",
   "weight": 1,
   "priority": 0,
   "disabled": false
@@ -51,9 +50,12 @@ under the auth directory; a user-supplied `id` field is stored but ignored.
 Every file loads as its own auth, so use one file per account — the same key
 in two files loads twice instead of being rejected. Renaming, editing or
 deleting a file takes effect when the host rescans the auth directory; no
-plugin restart is needed. Uploaded files are not validated against the shape
-above at upload time (a non-string `quota_api_key` or `workspace` loads, then
-fails at request time); the unit-tested ParseAuth in
+plugin restart is needed. The management UI derives the display label from the
+file itself; a file-level `label` is ignored on the generic file path.
+Uploaded files are not validated against the shape above at upload
+time: a non-string `quota_api_key` loads and the quota request falls back to
+`api_key`, and a non-string `workspace` loads and stays inert metadata, so
+neither fails at request time for that reason; the unit-tested ParseAuth in
 `internal/opencodego/auth.go` documents the intended shape. `prefix`,
 `proxy_url`, and the host's routing fields are preserved. Model discovery and
 quota polls go through the auth's `proxy_url`, else the host's global

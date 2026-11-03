@@ -141,3 +141,24 @@ func TestInvalidSuccessfulDiscoveryDoesNotSilentlyUseWrongProtocol(t *testing.T)
 		t.Fatal("invalid catalog hidden behind stale protocol fallback")
 	}
 }
+
+// The executor carries no host configuration, so static-model discovery must
+// prime the shared host proxy: otherwise a first request before any per-auth
+// discovery would reach upstream without the host's global proxy-url.
+func TestStaticModelsPrimeHostProxy(t *testing.T) {
+	c := newCatalog("http://127.0.0.1:0", nil)
+	if _, err := c.StaticModels(context.Background(), pluginapi.StaticModelRequest{Host: pluginapi.HostConfigSummary{ProxyURL: "http://127.0.0.1:8080"}}); err != nil {
+		t.Fatal(err)
+	}
+	p := c.hostProxy.Load()
+	if p == nil || *p != "http://127.0.0.1:8080" {
+		t.Fatalf("host proxy not primed: %v", p)
+	}
+	// A host call without proxy configuration must never clear the learned one.
+	if _, err := c.StaticModels(context.Background(), pluginapi.StaticModelRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if p := c.hostProxy.Load(); p == nil || *p != "http://127.0.0.1:8080" {
+		t.Fatalf("host proxy cleared: %v", p)
+	}
+}

@@ -25,7 +25,10 @@ failover support as permission to evade these restrictions.
 
 ## Auth file
 
-Create one private JSON file per account in the configured auth directory.
+The provider is API-key only: there is no login card in the management UI.
+Upload one private JSON file per account through the management UI's auth-file
+upload (the same path built-in API-key providers use), or place the file
+directly in the configured auth directory.
 These are placeholders, not usable credentials:
 
 ```json
@@ -33,7 +36,6 @@ These are placeholders, not usable credentials:
   "type": "opencode-go",
   "api_key": "example-inference-key",
   "quota_api_key": "example-quota-key",
-  "label": "Example account",
   "weight": 1,
   "priority": 0,
   "disabled": false
@@ -42,23 +44,24 @@ These are placeholders, not usable credentials:
 
 Use mode `0600`. `quota_api_key` is optional and defaults to `api_key`.
 New Console keys normally begin `oc_sk_`; legacy `sk-` keys may also work.
-Console device OAuth is not the Go API-key flow; see Management-UI login
-below. Refresh preserves the key. IDs are stable
-`opencode-go:<first 12 hex SHA256 characters of api_key>` unless an explicit
-`id` is supplied. `prefix`, `proxy_url`, and the host's routing fields are
-preserved. Model discovery and quota polls go through the auth's
-`proxy_url`, else the host's global `proxy-url`, like inference does. Optional `workspace` is metadata only, never an HTTP path or scraping
-input. No browser sessions or dashboard scraping are used.
-
-## Management-UI login
-
-The management UI's **Start OpenCode Go Login** card serves a kit login page
-that prompts for the API key and the optional `quota_api_key` and `workspace`
-fields, then submits them over an authenticated management POST (secrets travel
-in the POST body only, never in URLs, logs or process arguments). The
-submission runs the same ParseAuth validation and duplicate-key guard as an
-uploaded auth file. Blank optional fields are skipped. On a remote host, set
-`CLIPROXY_BASE` to an `https://` base so secrets are encrypted in transit.
+Set both keys in the file, because there is no login form to fill them in
+later. Refresh preserves the key. The auth ID is the file's relative path
+under the auth directory; a user-supplied `id` field is stored but ignored.
+Every file loads as its own auth, so use one file per account — the same key
+in two files loads twice instead of being rejected. Renaming, editing or
+deleting a file takes effect when the host rescans the auth directory; no
+plugin restart is needed. The management UI derives the display label from the
+file itself; a file-level `label` is ignored on the generic file path.
+Uploaded files are not validated against the shape above at upload
+time: a non-string `quota_api_key` loads and the quota request falls back to
+`api_key`, and a non-string `workspace` loads and stays inert metadata, so
+neither fails at request time for that reason; the unit-tested ParseAuth in
+`internal/opencodego/auth.go` documents the intended shape. `prefix`,
+`proxy_url`, and the host's routing fields are preserved. Model discovery and
+quota polls go through the auth's `proxy_url`, else the host's global
+`proxy-url`, like inference does. Optional `workspace` is metadata only, never
+an HTTP path or scraping input. No browser sessions or dashboard scraping are
+used.
 
 ## Models and protocols
 
@@ -153,9 +156,9 @@ a loopback-only mock base; production artifacts have a fixed provider origin.
 
 CI checks formatting, module verification, vet, race tests, the shared library
 entry point, the host registry schema, gitleaks and generic public-file hygiene.
-`dist/opencode-go_0.2.3_linux_amd64.zip` contains `opencode-go.so`, its
+`dist/opencode-go_0.2.4_linux_amd64.zip` contains `opencode-go.so`, its
 `checksums.txt`, and `LICENSE`. The external `dist/checksums.txt` hashes the ZIP
-for the host store. Publish both assets on tag `v0.2.3`; packaging itself never
+for the host store. Publish both assets on tag `v0.2.4`; packaging itself never
 publishes, installs or restarts anything.
 
 ## Installation and migration
@@ -176,7 +179,7 @@ plugins:
 ```
 
 The store installs the release as
-`plugins/linux/amd64/opencode-go-v0.2.3.so`. A native `openai-compatibility`
+`plugins/linux/amd64/opencode-go-v0.2.4.so`. A native `openai-compatibility`
 entry named `opencode-go` pre-empts the plugin executor; remove it from the
 **staging config copy** before testing, and from production only at cutover.
 The offline `cmd/migrate` tool reads a config copy and creates disabled private

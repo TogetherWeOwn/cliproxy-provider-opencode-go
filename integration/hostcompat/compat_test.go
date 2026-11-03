@@ -180,15 +180,31 @@ func TestRealHostLoaderAllProviderCapabilities(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	host.ApplyConfig(ctx, cfg)
-	if !host.PluginLoaded("opencode-go") || !host.PluginRegistered("opencode-go") || !host.HasAuthProvider("opencode-go") || !host.HasQuotaProvider("opencode-go") {
+	// API-key only: the plugin registers no AuthProvider, so the
+	// management UI shows no login card.
+	if !host.PluginLoaded("opencode-go") || !host.PluginRegistered("opencode-go") || host.HasAuthProvider("opencode-go") || !host.HasQuotaProvider("opencode-go") {
 		t.Fatalf("registration failed: %+v", host.RegisteredPlugins())
 	}
-	auth, handled, err := host.ParseAuth(ctx, pluginapi.AuthParseRequest{Provider: "opencode-go", FileName: "example.json", RawJSON: []byte(`{"type":"opencode-go","id":"example-a","api_key":"example-key"}`)})
-	if err != nil || !handled || auth == nil {
-		t.Fatalf("parse %v %v", handled, err)
+	// Without an AuthProvider the host leaves the parse unhandled and the auth
+	// file loads through the generic file path instead: provider from type,
+	// ID from the relative path, metadata from the file JSON.
+	fileRaw := []byte(`{"type":"opencode-go","api_key":"example-key"}`)
+	if _, handled, err := host.ParseAuth(ctx, pluginapi.AuthParseRequest{Provider: "opencode-go", FileName: "example.json", RawJSON: fileRaw}); err != nil || handled {
+		t.Fatalf("plugin auth unexpectedly handled %v %v", handled, err)
+	}
+	var metadata map[string]any
+	if json.Unmarshal(fileRaw, &metadata) != nil {
+		t.Fatal("invalid fixture JSON")
 	}
 	savedPath := filepath.Join(cfg.AuthDir, "example.json")
-	if err = auth.Storage.SaveTokenToFile(savedPath); err != nil {
+	if err := os.WriteFile(savedPath, fileRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	auth := host.AuthDataToCoreAuth(pluginapi.AuthData{Provider: "opencode-go", FileName: "example.json", StorageJSON: fileRaw, Metadata: metadata}, savedPath, "example.json")
+	if auth == nil {
+		t.Fatal("generic file auth did not convert")
+	}
+	if err := auth.Storage.SaveTokenToFile(savedPath); err != nil {
 		t.Fatal(err)
 	}
 	saved, err := os.ReadFile(savedPath)
@@ -281,9 +297,14 @@ func TestRealHostLoaderAllProviderCapabilities(t *testing.T) {
 
 	// No plugin scheduler: prove error envelopes drive the real host conductor's
 	// sibling selection and that failures do not poison a different credential.
-	sibling, handled, err := host.ParseAuth(ctx, pluginapi.AuthParseRequest{Provider: "opencode-go", RawJSON: []byte(`{"type":"opencode-go","id":"example-b","api_key":"example-sibling-key"}`)})
-	if err != nil || !handled || sibling == nil {
-		t.Fatal("sibling parse failed")
+	siblingRaw := []byte(`{"type":"opencode-go","api_key":"example-sibling-key"}`)
+	var siblingMeta map[string]any
+	if json.Unmarshal(siblingRaw, &siblingMeta) != nil {
+		t.Fatal("invalid fixture JSON")
+	}
+	sibling := host.AuthDataToCoreAuth(pluginapi.AuthData{Provider: "opencode-go", FileName: "sibling.json", StorageJSON: siblingRaw, Metadata: siblingMeta}, filepath.Join(cfg.AuthDir, "sibling.json"), "sibling.json")
+	if sibling == nil {
+		t.Fatal("generic sibling auth did not convert")
 	}
 	for _, status := range []int32{429, 403} {
 		failure.Store(status)

@@ -50,7 +50,7 @@ func (e *executor) prepare(ctx context.Context, r pluginapi.ExecutorRequest) (pr
 	if err != nil {
 		return preparedRequest{}, err
 	}
-	format, err := e.catalog.resolve(ctx, model, r.StorageJSON, r.AuthMetadata)
+	format, err := e.catalog.resolve(ctx, model, r.StorageJSON, r.AuthMetadata, r.HTTPClient)
 	if err != nil {
 		return preparedRequest{}, err
 	}
@@ -471,7 +471,7 @@ func (e *executor) HttpRequest(ctx context.Context, r pluginapi.ExecutorHTTPRequ
 	}
 	// Never send credentials to a caller-supplied URL. Rebuild the destination
 	// from the model catalog, just as Execute does.
-	format, err := e.catalog.resolve(ctx, strings.TrimPrefix(body.Model, modelPrefix), r.StorageJSON, r.Metadata)
+	format, err := e.catalog.resolve(ctx, strings.TrimPrefix(body.Model, modelPrefix), r.StorageJSON, r.Metadata, r.HTTPClient)
 	if err != nil {
 		return pluginapi.ExecutorHTTPResponse{}, err
 	}

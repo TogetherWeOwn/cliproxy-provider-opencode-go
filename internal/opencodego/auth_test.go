@@ -32,7 +32,7 @@ func TestAuthValidationAndStableIdentity(t *testing.T) {
 func TestProxyAuthRejectsDuplicateKeyAcrossFiles(t *testing.T) {
 	c := newCatalog("http://opencode.invalid", nil)
 	defer c.client.CloseIdleConnections()
-	auth := newProxyAuth(c)
+	auth := newProxyAuth()
 	raw := []byte(`{"type":"opencode-go","api_key":"shared-key"}`)
 	first, err := auth.ParseAuth(context.Background(), pluginapi.AuthParseRequest{RawJSON: raw, FileName: "one.json"})
 	if err != nil || !first.Handled {

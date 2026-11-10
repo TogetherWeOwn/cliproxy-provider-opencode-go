@@ -44,7 +44,7 @@ func TestDocumentedModelsHaveExplicitProtocols(t *testing.T) {
 	}
 }
 
-func TestDiscoveryCacheAndProtocolOverride(t *testing.T) {
+func TestDiscoveryEveryInvocationFetchesAndRouteCacheFeedsExecutor(t *testing.T) {
 	var calls atomic.Int32
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -55,26 +55,37 @@ func TestDiscoveryCacheAndProtocolOverride(t *testing.T) {
 	}))
 	defer s.Close()
 	c := newCatalog(s.URL, nil)
-	req := pluginapi.AuthModelRequest{AuthID: "one", StorageJSON: []byte(`{"api_key":"example-key"}`)}
+	req := pluginapi.AuthModelRequest{AuthID: "one", StorageJSON: []byte(`{"api_key":"example-key"}`), HTTPClient: testHTTP{s.Client()}}
+	// The kit ModelCatalog fetches on every ModelsForAuth invocation: its TTL
+	// bounds freshness markers only, never fetch gating, so a one-shot
+	// catalog callback is never skipped (design §§3-4).
 	for range 2 {
 		got, err := c.ModelsForAuth(context.Background(), req)
 		if err != nil || len(got.Models) != 2 || got.Models[0].ID != "opencode-go/future-model" || got.Models[1].ID != "opencode-go/minimax-m3" {
 			t.Fatalf("models %+v %v", got, err)
 		}
 	}
-	route, err := c.resolve(context.Background(), "minimax-m3", req.StorageJSON, nil)
-	if err != nil || route != "openai" || calls.Load() != 1 {
+	// Unknown metadata ids never reach model serving (never guessed into Chat).
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("discovery calls=%d, want 2 (one per ModelsForAuth invocation)", got)
+	}
+	// The executor reads the plugin-owned route cache populated by Fetch:
+	// minimax-m3's catalog override (openai) wins over its static protocol.
+	route, err := c.resolve(context.Background(), "minimax-m3", req.StorageJSON, nil, testHTTP{s.Client()})
+	if err != nil || route != "openai" || calls.Load() != 2 {
 		t.Fatalf("route %s calls %d err %v", route, calls.Load(), err)
 	}
+	// Once the route-cache entry goes stale, the executor refreshes it through
+	// its own host client (the existing 60-second route-cache behavior).
 	c.mu.Lock()
 	for k, v := range c.cache {
 		v.expires = time.Time{}
 		c.cache[k] = v
 	}
 	c.mu.Unlock()
-	_, err = c.ModelsForAuth(context.Background(), req)
-	if err != nil || calls.Load() != 2 {
-		t.Fatalf("expired cache calls=%d err=%v", calls.Load(), err)
+	route, err = c.resolve(context.Background(), "minimax-m3", req.StorageJSON, nil, testHTTP{s.Client()})
+	if err != nil || route != "openai" || calls.Load() != 3 {
+		t.Fatalf("stale resolve route %s calls=%d err=%v", route, calls.Load(), err)
 	}
 }
 
@@ -89,20 +100,27 @@ func TestDiscoveryFallbackAndCredentialIsolation(t *testing.T) {
 	}))
 	defer s.Close()
 	c := newCatalog(s.URL, nil)
-	req := pluginapi.AuthModelRequest{AuthID: "same", StorageJSON: []byte(`{"api_key":"example-key"}`)}
+	req := pluginapi.AuthModelRequest{AuthID: "same", StorageJSON: []byte(`{"api_key":"example-key"}`), HTTPClient: testHTTP{s.Client()}}
 	got, err := c.ModelsForAuth(context.Background(), req)
 	if err != nil || len(got.Models) != 30 {
 		t.Fatalf("fallback %d %v", len(got.Models), err)
 	}
+	// Behavior change (kit pipeline semantics, design §4): a 401 during
+	// discovery no longer surfaces as a discovery error while a fallback
+	// exists; the static snapshot is served. Inference still enforces the
+	// credential per request, and credential generation isolation (the
+	// rotated key fetches independently and never inherits a last-good
+	// generation) is asserted in TestModelCatalogCredentialGenerationIsolation.
 	status.Store(401)
 	req.StorageJSON = []byte(`{"api_key":"different-example-key"}`)
-	if _, err = c.ModelsForAuth(context.Background(), req); err == nil {
-		t.Fatal("bad credential hidden behind cached catalog")
+	got, err = c.ModelsForAuth(context.Background(), req)
+	if err != nil || len(got.Models) != 30 {
+		t.Fatalf("401 fallback %d %v", len(got.Models), err)
 	}
 	if calls.Load() != 2 {
 		t.Fatal("cache crossed credential boundary")
 	}
-	if _, err = c.resolve(context.Background(), "opencode-go/unknown", []byte(`{"api_key":"example-key"}`), nil); err == nil {
+	if _, err = c.resolve(context.Background(), "opencode-go/unknown", []byte(`{"api_key":"example-key"}`), nil, testHTTP{s.Client()}); err == nil {
 		t.Fatal("unknown model guessed a protocol")
 	}
 }
@@ -116,7 +134,7 @@ func TestDiscoveryRejectsUnsafeOrConflictingMetadata(t *testing.T) {
 		`null`,
 	} {
 		t.Run(strings.ReplaceAll(raw[:min(len(raw), 24)], "/", "_"), func(t *testing.T) {
-			if _, err := parseModels([]byte(raw)); err == nil {
+			if _, _, err := parseCatalog([]byte(raw)); err == nil {
 				t.Fatal("unsafe or ambiguous catalog accepted")
 			}
 		})
@@ -124,74 +142,29 @@ func TestDiscoveryRejectsUnsafeOrConflictingMetadata(t *testing.T) {
 }
 
 func TestOpenAIBaseDoesNotOverrideResponsesOrGuessUnknownProtocol(t *testing.T) {
-	got, err := parseModels([]byte(`{"data":[{"id":"gpt-6-luna","api":{"npm":"@ai-sdk/openai","url":"https://opencode.ai/inference/go/openai/v1"}},{"id":"new-responses","protocol":"responses","api":{"npm":"@ai-sdk/openai","url":"https://opencode.ai/inference/go/openai/v1"}},{"id":"ambiguous-new","api":{"npm":"@ai-sdk/openai","url":"https://opencode.ai/inference/go/openai/v1"}}]}`))
+	got, _, err := parseCatalog([]byte(`{"data":[{"id":"gpt-6-luna","api":{"npm":"@ai-sdk/openai","url":"https://opencode.ai/inference/go/openai/v1"}},{"id":"new-responses","protocol":"responses","api":{"npm":"@ai-sdk/openai","url":"https://opencode.ai/inference/go/openai/v1"}},{"id":"ambiguous-new","api":{"npm":"@ai-sdk/openai","url":"https://opencode.ai/inference/go/openai/v1"}}]}`))
 	if err != nil || got["gpt-6-luna"] != "openai-response" || got["new-responses"] != "openai-response" || got["ambiguous-new"] != "" {
 		t.Fatalf("routes %+v %v", got, err)
 	}
 }
 
-func TestInvalidSuccessfulDiscoveryDoesNotSilentlyUseWrongProtocol(t *testing.T) {
+func TestInvalidSuccessfulDiscoveryFallsBackWithoutPublishingRoutes(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"data":[{"id":"glm-5.3","protocol":"unknown-protocol"}]}`)
 	}))
 	defer s.Close()
 	c := newCatalog(s.URL, nil)
-	_, err := c.ModelsForAuth(context.Background(), pluginapi.AuthModelRequest{AuthID: "one", StorageJSON: []byte(`{"api_key":"example"}`)})
-	if err == nil {
-		t.Fatal("invalid catalog hidden behind stale protocol fallback")
+	// Kit pipeline semantics (design §4): a 200 but invalid catalog is a
+	// failed fetch; the static snapshot serves instead of a 502. The invalid
+	// refresh never writes the route cache, so the executor keeps the
+	// documented static protocol rather than a wrong one from the catalog.
+	req := pluginapi.AuthModelRequest{AuthID: "one", StorageJSON: []byte(`{"api_key":"example"}`), HTTPClient: testHTTP{s.Client()}}
+	got, err := c.ModelsForAuth(context.Background(), req)
+	if err != nil || len(got.Models) != 30 {
+		t.Fatalf("invalid catalog fallback %d %v", len(got.Models), err)
 	}
-}
-
-// The executor carries no host configuration, so static-model discovery must
-// prime the shared host proxy: otherwise a first request before any per-auth
-// discovery would reach upstream without the host's global proxy-url. The
-// host always sends its current configuration here, so a later proxy-free
-// configuration clears the learned value instead of retaining a removed proxy.
-func TestStaticModelsProxyLifecycleRoutesDiscovery(t *testing.T) {
-	for _, v := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
-		t.Setenv(v, "")
-	}
-	t.Setenv("NO_PROXY", "*")
-	var upstreamCalls, proxyCalls atomic.Int32
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		upstreamCalls.Add(1)
-		fmt.Fprint(w, `{"data":[{"id":"minimax-m3","protocol":"openai"}]}`)
-	}))
-	defer upstream.Close()
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		proxyCalls.Add(1)
-		// Answer discovery from the proxy itself: reaching this handler
-		// proves the request was routed through the configured proxy.
-		fmt.Fprint(w, `{"data":[{"id":"minimax-m3","protocol":"openai"}]}`)
-	}))
-	defer proxy.Close()
-	c := newCatalog(upstream.URL, nil)
-	if _, err := c.StaticModels(context.Background(), pluginapi.StaticModelRequest{Host: pluginapi.HostConfigSummary{ProxyURL: proxy.URL}}); err != nil {
-		t.Fatal(err)
-	}
-	if p := c.hostProxy.Load(); p == nil || *p != proxy.URL {
-		t.Fatalf("host proxy not primed: %v", p)
-	}
-	route, err := c.resolve(context.Background(), "minimax-m3", []byte(`{"api_key":"lifecycle-key-one"}`), nil)
+	route, err := c.resolve(context.Background(), "glm-5.3", req.StorageJSON, nil, testHTTP{s.Client()})
 	if err != nil || route != "openai" {
 		t.Fatalf("route %q err %v", route, err)
-	}
-	if proxyCalls.Load() != 1 || upstreamCalls.Load() != 0 {
-		t.Fatalf("discovery bypassed the primed proxy: proxy=%d upstream=%d", proxyCalls.Load(), upstreamCalls.Load())
-	}
-	// A proxy-free host configuration clears the learned value: the next
-	// uncached discovery must go direct instead of through the removed proxy.
-	if _, err := c.StaticModels(context.Background(), pluginapi.StaticModelRequest{}); err != nil {
-		t.Fatal(err)
-	}
-	if p := c.hostProxy.Load(); p == nil || *p != "" {
-		t.Fatalf("removed proxy still retained: %v", p)
-	}
-	route, err = c.resolve(context.Background(), "minimax-m3", []byte(`{"api_key":"lifecycle-key-two"}`), nil)
-	if err != nil || route != "openai" {
-		t.Fatalf("route %q err %v", route, err)
-	}
-	if proxyCalls.Load() != 1 || upstreamCalls.Load() != 1 {
-		t.Fatalf("discovery did not go direct after removal: proxy=%d upstream=%d", proxyCalls.Load(), upstreamCalls.Load())
 	}
 }

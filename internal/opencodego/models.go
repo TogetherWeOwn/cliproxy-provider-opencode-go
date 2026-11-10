@@ -87,6 +87,49 @@ func newCatalog(base string, transport http.RoundTripper) *catalog {
 	return c
 }
 
+// withProvider pins the response provider to the stable provider id. The
+// kit ModelCatalog echoes req.Plugin.Name, which is the plugin's
+// human-readable display name ("OpenCode Go") since the display-name
+// metadata change; the host keys executor registration off the provider
+// name, so serving that display name would register the executor under
+// "opencode go" instead of "opencode-go". Normalize every model-serving
+// entry point to the constant here.
+func fixProvider(resp *pluginapi.ModelResponse) {
+	if resp.Provider == "" || resp.Provider != provider {
+		resp.Provider = provider
+	}
+	for i := range resp.Registrations {
+		resp.Registrations[i].Provider = provider
+	}
+}
+
+// ModelsForAuth serves through the embedded kit catalog with the
+// provider id normalized (see fixProvider).
+func (c *catalog) ModelsForAuth(ctx context.Context, req pluginapi.AuthModelRequest) (pluginapi.ModelResponse, error) {
+	resp, err := c.ModelCatalog.ModelsForAuth(ctx, req)
+	fixProvider(&resp)
+	return resp, err
+}
+
+// StaticModels serves the static list through the embedded kit catalog
+// with the provider id normalized (see fixProvider).
+func (c *catalog) StaticModels(ctx context.Context, req pluginapi.StaticModelRequest) (pluginapi.ModelResponse, error) {
+	resp, err := c.ModelCatalog.StaticModels(ctx, req)
+	fixProvider(&resp)
+	return resp, err
+}
+
+// RegisterModels serves the static list through the embedded kit catalog
+// with the provider id normalized (see fixProvider).
+func (c *catalog) RegisterModels(ctx context.Context, req pluginapi.ModelRegistrationRequest) (pluginapi.ModelRegistrationResponse, error) {
+	resp, err := c.ModelCatalog.RegisterModels(ctx, req)
+	resp.Provider = provider
+	for i := range resp.Registrations {
+		resp.Registrations[i].Provider = provider
+	}
+	return resp, err
+}
+
 // fetch is the plugin's FetchModelsFunc: it runs the existing discovery
 // fetch through the request's host HTTP client, enforces the post-return
 // parse cap itself, populates the route cache for this credential and

@@ -338,3 +338,26 @@ func TestModelCatalogValidateDropsUnknownProtocol(t *testing.T) {
 		t.Fatalf("known route %q err %v", route, err)
 	}
 }
+
+// The kit ModelCatalog echoes req.Plugin.Name as the response provider, and
+// the plugin's metadata Name is the human-readable display name ("OpenCode
+// Go"). The host keys executor registration off the provider name, so every
+// model-serving entry point must pin Provider to the stable provider id
+// ("opencode-go") even when the request carries the display name.
+func TestModelCatalogProviderPinnedToProviderID(t *testing.T) {
+	fixture := &scriptedHostClient{status: 200, body: `{"data":[{"id":"pinned-provider-id","protocol":"openai"}]}`}
+	c := newCatalog("http://opencode.invalid", nil)
+	displayName := pluginapi.Metadata{Name: "OpenCode Go"}
+	ctx := context.Background()
+	if resp, err := c.RegisterModels(ctx, pluginapi.ModelRegistrationRequest{Plugin: displayName}); err != nil || resp.Provider != provider {
+		t.Fatalf("RegisterModels provider %q err %v, want %q", resp.Provider, err, provider)
+	}
+	if resp, err := c.StaticModels(ctx, pluginapi.StaticModelRequest{Plugin: displayName}); err != nil || resp.Provider != provider {
+		t.Fatalf("StaticModels provider %q err %v, want %q", resp.Provider, err, provider)
+	}
+	req := modelCatalogAuthReq("auth-1", "example-key", fixture)
+	req.Plugin = displayName
+	if resp, err := c.ModelsForAuth(ctx, req); err != nil || resp.Provider != provider {
+		t.Fatalf("ModelsForAuth provider %q err %v, want %q", resp.Provider, err, provider)
+	}
+}

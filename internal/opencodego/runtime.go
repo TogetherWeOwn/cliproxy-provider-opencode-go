@@ -17,7 +17,7 @@ func NewRuntime(host kit.Caller) (*kit.Runtime, error) {
 	// through the host's generic file path.
 	q := newQuotaWithClient(selectedBase, c.client)
 	return kit.New(kit.Definition{
-		Metadata:       pluginapi.Metadata{Name: displayName, Version: "0.2.4", Author: "TogetherWeOwn", GitHubRepository: "https://github.com/TogetherWeOwn/cliproxy-provider-opencode-go", Logo: "https://www.google.com/s2/favicons?domain=opencode.ai"},
+		Metadata:       pluginapi.Metadata{Name: displayName, Version: "0.3.0", Author: "TogetherWeOwn", GitHubRepository: "https://github.com/TogetherWeOwn/cliproxy-provider-opencode-go", Logo: "https://www.google.com/s2/favicons?domain=opencode.ai"},
 		ModelNamespace: "opencode-go",
 		Configure:      configureBase,
 		Capabilities: pluginapi.Capabilities{

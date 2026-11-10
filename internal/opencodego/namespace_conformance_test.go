@@ -18,7 +18,10 @@ import (
 func TestModelNamespaceConformance(t *testing.T) {
 	ctx := context.Background()
 	var all []pluginapi.ModelInfo
-	all = append(all, modelList(staticRoutes())...)
+	for _, m := range staticModelInfos() {
+		m.ID = modelPrefix + m.ID
+		all = append(all, m)
+	}
 
 	c := newCatalog("http://127.0.0.1:0", nil)
 	reg, err := c.RegisterModels(ctx, pluginapi.ModelRegistrationRequest{})
@@ -42,7 +45,7 @@ func TestModelNamespaceConformance(t *testing.T) {
 		fmt.Fprint(w, `{"data":[{"id":"glm-5.3-flash","protocol":"openai"},{"id":"minimax-m3","api":{"npm":"@ai-sdk/anthropic"}},{"id":"conformance-probe-only","protocol":"openai"}]}`)
 	}))
 	defer s.Close()
-	discovered, err := newCatalog(s.URL, nil).ModelsForAuth(ctx, pluginapi.AuthModelRequest{AuthID: "one", StorageJSON: []byte(`{"api_key":"example-key"}`)})
+	discovered, err := newCatalog(s.URL, nil).ModelsForAuth(ctx, pluginapi.AuthModelRequest{AuthID: "one", StorageJSON: []byte(`{"api_key":"example-key"}`), HTTPClient: testHTTP{s.Client()}})
 	if err != nil {
 		t.Fatal(err)
 	}

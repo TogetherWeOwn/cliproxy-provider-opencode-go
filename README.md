@@ -3,8 +3,8 @@
 A first-class OpenCode Go provider plugin for **CLIProxyAPI v8.0.49**, built
 against
 [`cliproxy-provider-kit`](https://github.com/TogetherWeOwn/cliproxy-provider-kit)
-at `88850ce` (v0.1.0 plus quota/discovery proxy support and the v8.0.49
-plugin ABI: RPC schema 10; hosts older than schema 10 are refused).
+v0.5.0 (the v8.0.49 plugin ABI: RPC schema 10; hosts older than schema 10
+are refused).
 It implements API-key auth, model registration/discovery, multi-protocol
 inference (including streaming), and read-only quota cards. **Live provider
 verification and staging acceptance remain pending.** No provider endpoints are
@@ -57,9 +57,10 @@ time: a non-string `quota_api_key` loads and the quota request falls back to
 `api_key`, and a non-string `workspace` loads and stays inert metadata, so
 neither fails at request time for that reason; the unit-tested ParseAuth in
 `internal/opencodego/auth.go` documents the intended shape. `prefix`,
-`proxy_url`, and the host's routing fields are preserved. Model discovery and
-quota polls go through the auth's `proxy_url`, else the host's global
-`proxy-url`, like inference does. Optional `workspace` is metadata only, never
+`proxy_url`, and the host's routing fields are preserved. Quota polls go
+through the auth's `proxy_url`, else the host's global `proxy-url`, like
+inference does; model discovery runs through the host's HTTP client, whose
+transport policy owns proxying. Optional `workspace` is metadata only, never
 an HTTP path or scraping input. No browser sessions or dashboard scraping are
 used.
 
@@ -84,14 +85,20 @@ Without conversation metadata, no global per-account session is fabricated.
 Caller credentials, arbitrary destinations and unrelated headers are not
 forwarded.
 
-`GET /inference/go/v1/models` is authenticated and cached per credential for
-60 seconds. Explicit catalog protocol/endpoint metadata takes precedence over
-the documented 30-model snapshot, including the disputed `minimax-m3` protocol.
-A catalog containing only known IDs uses the documented protocol table. New
-IDs require recognized protocol metadata; unknown IDs are never guessed into
-Chat. Network/discovery-endpoint failures use the static snapshot, except
-authentication and forbidden responses, which remain errors. A successful but
-invalid or ambiguous catalog fails closed rather than hiding a protocol change. Discovery does not invent an
+`GET /inference/go/v1/models` is authenticated. Model serving runs on the
+kit ModelCatalog: every `ModelsForAuth` host event performs a fresh fetch
+through the host HTTP client (15-second deadline, 1 MiB post-return parse
+cap), and the kit pipelines fetch, filtering, the durable per-credential
+last-good store and the static snapshot. The plugin keeps its own
+per-credential route cache (60 seconds) mapping upstream model ids to
+protocols for the executor; explicit catalog protocol/endpoint metadata
+takes precedence over the documented 30-model snapshot, including the
+disputed `minimax-m3` protocol. The plugin's `Fetch` + `Validate` hooks
+drop ids without recognized protocol metadata: unknown IDs are never guessed
+into Chat. Fetch failures — network errors, 401/403 responses and successful
+but invalid or ambiguous catalogs — serve last-good, else the static
+snapshot; they do not surface as discovery errors while a fallback exists,
+and an invalid catalog never publishes routes. Discovery does not invent an
 entitlement or establish that fallback models are currently available.
 
 The host chooses formats by client, not by model. The executor therefore uses
@@ -156,9 +163,9 @@ a loopback-only mock base; production artifacts have a fixed provider origin.
 
 CI checks formatting, module verification, vet, race tests, the shared library
 entry point, the host registry schema, gitleaks and generic public-file hygiene.
-`dist/opencode-go_0.2.4_linux_amd64.zip` contains `opencode-go.so`, its
+`dist/opencode-go_0.3.0_linux_amd64.zip` contains `opencode-go.so`, its
 `checksums.txt`, and `LICENSE`. The external `dist/checksums.txt` hashes the ZIP
-for the host store. Publish both assets on tag `v0.2.4`; packaging itself never
+for the host store. Publish both assets on tag `v0.3.0`; packaging itself never
 publishes, installs or restarts anything.
 
 ## Installation and migration
@@ -179,7 +186,7 @@ plugins:
 ```
 
 The store installs the release as
-`plugins/linux/amd64/opencode-go-v0.2.4.so`. A native `openai-compatibility`
+`plugins/linux/amd64/opencode-go-v0.3.0.so`. A native `openai-compatibility`
 entry named `opencode-go` pre-empts the plugin executor; remove it from the
 **staging config copy** before testing, and from production only at cutover.
 The offline `cmd/migrate` tool reads a config copy and creates disabled private

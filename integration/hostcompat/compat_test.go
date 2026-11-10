@@ -235,8 +235,8 @@ func TestRealHostLoaderAllProviderCapabilities(t *testing.T) {
 			}
 		}
 	}
-	if modelCalls.Load() != 1 {
-		t.Fatal("discovery cache not used")
+	if modelCalls.Load() != 2 {
+		t.Fatal("discovery fetch count changed")
 	}
 	mr := modelRecorder{ids: map[string]bool{}}
 	m := executors{}

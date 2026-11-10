@@ -61,6 +61,10 @@ func staticModelInfos() []pluginapi.ModelInfo {
 type catalogEntry struct {
 	routes  map[string]string
 	expires time.Time
+	// negative marks a failed-refresh backoff entry holding the static
+	// snapshot. It stops inference requests from repeating a failing
+	// discovery call on every request, and never satisfies validate.
+	negative bool
 }
 
 // catalog embeds the kit ModelCatalog (model serving, single-flight and the
@@ -70,14 +74,15 @@ type catalogEntry struct {
 // per design §5.
 type catalog struct {
 	*kit.ModelCatalog
-	base   func() string
-	client *kit.QuotaHTTPClient
-	mu     sync.Mutex
-	cache  map[[32]byte]catalogEntry
+	base     func() string
+	client   *kit.QuotaHTTPClient
+	mu       sync.Mutex
+	cache    map[[32]byte]catalogEntry
+	lastGood map[[32]byte]map[string]string
 }
 
 func newCatalog(base string, transport http.RoundTripper) *catalog {
-	c := &catalog{base: func() string { return base }, client: kit.NewQuotaHTTPClient(transport), cache: map[[32]byte]catalogEntry{}}
+	c := &catalog{base: func() string { return base }, client: kit.NewQuotaHTTPClient(transport), cache: map[[32]byte]catalogEntry{}, lastGood: map[[32]byte]map[string]string{}}
 	c.ModelCatalog = kit.NewModelCatalogWithTTL(kit.ModelCatalogConfig{
 		Namespace: provider,
 		Static:    staticModelInfos(),
@@ -208,38 +213,85 @@ func (c *catalog) validate(_ context.Context, req pluginapi.AuthModelRequest, mo
 func (c *catalog) storeRoutes(key string, routes map[string]string) {
 	digest := credentialDigest(key)
 	c.mu.Lock()
-	// Bound retained credential hashes; expiry does not retain stale credentials.
+	c.evictLocked()
+	if len(c.cache) >= 256 {
+		clear(c.cache)
+		clear(c.lastGood)
+	}
+	c.cache[digest] = catalogEntry{routes: routes, expires: time.Now().Add(catalogTTL)}
+	// The durable per-credential last-good map keeps routes for models the
+	// kit catalog still serves after a later discovery outage, so they do
+	// not lose their protocols when the fresh entry expires.
+	c.lastGood[digest] = routes
+	c.mu.Unlock()
+}
+
+// storeNegative records a failed-refresh backoff for this credential: the
+// static snapshot with a catalogTTL expiry. It never touches lastGood and
+// never satisfies validate, so a failed refresh never publishes routes.
+func (c *catalog) storeNegative(key string) {
+	digest := credentialDigest(key)
+	c.mu.Lock()
+	c.evictLocked()
+	if len(c.cache) >= 256 {
+		clear(c.cache)
+	}
+	c.cache[digest] = catalogEntry{routes: staticRoutes(), expires: time.Now().Add(catalogTTL), negative: true}
+	c.mu.Unlock()
+}
+
+// evictLocked drops expired cache entries; the durable lastGood map is
+// retained so outage fallback keeps validated routes.
+func (c *catalog) evictLocked() {
 	for k, v := range c.cache {
 		if time.Now().After(v.expires) {
 			delete(c.cache, k)
 		}
 	}
-	if len(c.cache) >= 256 {
-		clear(c.cache)
-	}
-	c.cache[digest] = catalogEntry{routes: routes, expires: time.Now().Add(catalogTTL)}
-	c.mu.Unlock()
 }
 
 // routes returns the fresh route entry for this credential, or nil when it
-// is absent or stale.
+// is absent, stale, or a failed-refresh backoff entry.
 func (c *catalog) routes(key string) map[string]string {
 	digest := credentialDigest(key)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.cache[digest]
-	if !ok || !time.Now().Before(entry.expires) {
+	if !ok || entry.negative || !time.Now().Before(entry.expires) {
 		return nil
 	}
 	return entry.routes
 }
 
+// backoff reports whether this credential is inside a failed-refresh
+// backoff window and inference must not repeat the discovery call.
+func (c *catalog) backoff(key string) bool {
+	digest := credentialDigest(key)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.cache[digest]
+	return ok && entry.negative && time.Now().Before(entry.expires)
+}
+
+// lastGoodRoutes returns the durable last successfully validated routes for
+// this credential, or nil when none exist.
+func (c *catalog) lastGoodRoutes(key string) map[string]string {
+	digest := credentialDigest(key)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastGood[digest]
+}
+
 // resolve maps one executor model id to its upstream protocol. The fresh
 // route entry is the source of truth; when it is stale or missing the
 // executor refreshes it through its own host HTTP client (same 60-second
-// cadence as before) and any refresh failure — network, status, parse —
-// falls back to the documented static snapshot rather than serving a stale
-// entry. Unknown ids still fail closed instead of guessing a protocol.
+// cadence as before), bounded by the kit fetch deadline so a hung discovery
+// call cannot hold inference. A failed refresh writes a failed-refresh
+// backoff entry so later requests do not repeat the failing call, and falls
+// back to this credential's durable last-good routes — which cover models
+// the kit catalog still serves during the outage — before the documented
+// static snapshot. Unknown ids fail closed: when a refresh was attempted
+// and failed, the discovery error surfaces; otherwise invalid_model.
 // Some kit fetch failures (e.g. a 401 during discovery) now serve the
 // static fallback silently for model serving (kit pipeline semantics,
 // design §4); the executor still enforces credentials per request, and an
@@ -254,16 +306,28 @@ func (c *catalog) resolve(ctx context.Context, id string, storage []byte, metada
 		return "", err
 	}
 	routes := c.routes(key)
-	if routes == nil && client != nil {
-		if _, ferr := c.fetch(ctx, pluginapi.AuthModelRequest{StorageJSON: storage, Metadata: metadata, HTTPClient: client}); ferr == nil {
+	var ferr error
+	if routes == nil && client != nil && !c.backoff(key) {
+		fctx, cancel := context.WithTimeout(ctx, kit.ModelsFetchTimeout)
+		_, ferr = c.fetch(fctx, pluginapi.AuthModelRequest{StorageJSON: storage, Metadata: metadata, HTTPClient: client})
+		cancel()
+		if ferr == nil {
 			routes = c.routes(key)
+		} else {
+			c.storeNegative(key)
 		}
+	}
+	if routes == nil {
+		routes = c.lastGoodRoutes(key)
 	}
 	if routes == nil {
 		routes = staticRoutes()
 	}
 	if format, ok := routes[id]; ok {
 		return format, nil
+	}
+	if ferr != nil {
+		return "", ferr
 	}
 	return "", &pluginabi.Error{Code: "invalid_model", Message: "model absent from OpenCode Go catalog or has no known protocol", HTTPStatus: 400}
 }

@@ -2,6 +2,7 @@ package opencodego
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
@@ -145,6 +147,87 @@ func TestOpenAIBaseDoesNotOverrideResponsesOrGuessUnknownProtocol(t *testing.T) 
 	got, _, err := parseCatalog([]byte(`{"data":[{"id":"gpt-6-luna","api":{"npm":"@ai-sdk/openai","url":"https://opencode.ai/inference/go/openai/v1"}},{"id":"new-responses","protocol":"responses","api":{"npm":"@ai-sdk/openai","url":"https://opencode.ai/inference/go/openai/v1"}},{"id":"ambiguous-new","api":{"npm":"@ai-sdk/openai","url":"https://opencode.ai/inference/go/openai/v1"}}]}`))
 	if err != nil || got["gpt-6-luna"] != "openai-response" || got["new-responses"] != "openai-response" || got["ambiguous-new"] != "" {
 		t.Fatalf("routes %+v %v", got, err)
+	}
+}
+
+// TestLastGoodRoutesSurviveOutage asserts the per-credential durable
+// last-good routes keep protocol mapping for models the kit catalog still
+// serves after discovery starts failing (review: last-good models must not
+// lose their routes when the fresh route cache expires).
+func TestLastGoodRoutesSurviveOutage(t *testing.T) {
+	var calls atomic.Int32
+	var healthy atomic.Int32
+	healthy.Store(1)
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if healthy.Load() == 0 {
+			w.WriteHeader(503)
+			fmt.Fprint(w, `{"error":{"type":"ServiceUnavailable"}}`)
+			return
+		}
+		fmt.Fprint(w, `{"data":[{"id":"future-model","api":{"npm":"@ai-sdk/anthropic","url":"https://opencode.ai/inference/go/anthropic/v1"}},{"id":"minimax-m3","protocol":"openai"}]}`)
+	}))
+	defer s.Close()
+	c := newCatalog(s.URL, nil)
+	req := pluginapi.AuthModelRequest{AuthID: "one", StorageJSON: []byte(`{"api_key":"example-key"}`), HTTPClient: testHTTP{s.Client()}}
+	got, err := c.ModelsForAuth(context.Background(), req)
+	if err != nil || len(got.Models) != 2 {
+		t.Fatalf("models %+v %v", got, err)
+	}
+	// Expire the fresh route cache, then break discovery. The kit catalog
+	// keeps serving its last-good models; resolve must still route the
+	// non-static future-model via the durable last-good routes.
+	c.mu.Lock()
+	for k, v := range c.cache {
+		v.expires = time.Time{}
+		c.cache[k] = v
+	}
+	c.mu.Unlock()
+	healthy.Store(0)
+	route, err := c.resolve(context.Background(), "future-model", req.StorageJSON, nil, testHTTP{s.Client()})
+	if err != nil || route != "claude" {
+		t.Fatalf("last-good route %q err %v", route, err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("discovery calls=%d, want 2 (ModelsForAuth + one failed refresh)", calls.Load())
+	}
+	// The failed refresh wrote a backoff entry: a later resolve must not
+	// repeat the failing discovery call, and still routes via last-good.
+	route, err = c.resolve(context.Background(), "future-model", req.StorageJSON, nil, testHTTP{s.Client()})
+	if err != nil || route != "claude" {
+		t.Fatalf("backoff last-good route %q err %v", route, err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("discovery calls=%d after backoff, want 2 (no refetch)", calls.Load())
+	}
+	// Last-good is per credential: a different credential has no last-good
+	// and falls back to the static snapshot, never inheriting the route.
+	route, err = c.resolve(context.Background(), "future-model", []byte(`{"api_key":"other-key"}`), nil, testHTTP{s.Client()})
+	if err == nil {
+		t.Fatalf("other credential routed %q from another credential's last-good", route)
+	}
+}
+
+// TestResolveSurfacesDiscoveryErrorForUnknownID asserts that when a route
+// refresh is attempted and fails, an id absent from every fallback gets
+// the discovery error rather than invalid_model.
+func TestResolveSurfacesDiscoveryErrorForUnknownID(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(503)
+		fmt.Fprint(w, `{"error":{"type":"ServiceUnavailable"}}`)
+	}))
+	defer s.Close()
+	c := newCatalog(s.URL, nil)
+	_, err := c.resolve(context.Background(), "no-such-model", []byte(`{"api_key":"example-key"}`), nil, testHTTP{s.Client()})
+	if err == nil {
+		t.Fatal("unknown id with failed discovery got no error")
+	}
+	var abiErr *pluginabi.Error
+	if errors.As(err, &abiErr) && abiErr.Code == "invalid_model" {
+		t.Fatalf("got invalid_model %v, want the discovery error", err)
+	}
+	if abiErr == nil || abiErr.Code != "models_fetch_failed" {
+		t.Fatalf("got %T %v, want models_fetch_failed", err, err)
 	}
 }
 

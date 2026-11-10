@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -228,6 +229,101 @@ func TestResolveSurfacesDiscoveryErrorForUnknownID(t *testing.T) {
 	}
 	if abiErr == nil || abiErr.Code != "models_fetch_failed" {
 		t.Fatalf("got %T %v, want models_fetch_failed", err, err)
+	}
+}
+
+// TestLastGoodEvictionIsBoundedOldestFirst asserts the route stores
+// evict oldest-first at maxRouteCredentials (mirroring the kit's
+// last-good bound) instead of clearing every credential at 256, and
+// that the last-good bound holds even when fresh entries expire between
+// stores (slow credential rotation).
+func TestLastGoodEvictionIsBoundedOldestFirst(t *testing.T) {
+	c := newCatalog("", nil)
+	routesOf := func(i int) map[string]string { return map[string]string{"model": fmt.Sprintf("proto-%d", i)} }
+	for i := 0; i < maxRouteCredentials+40; i++ {
+		// Simulate slow rotation: expire the fresh cache between stores
+		// so only the last-good bound can limit the durable map.
+		c.mu.Lock()
+		for k, v := range c.cache {
+			v.expires = time.Time{}
+			c.cache[k] = v
+		}
+		c.mu.Unlock()
+		c.storeRoutes(fmt.Sprintf("slow-key-%d", i), routesOf(i))
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.lastGood) != maxRouteCredentials {
+		t.Fatalf("lastGood holds %d, want %d", len(c.lastGood), maxRouteCredentials)
+	}
+	if got := c.lastGood[credentialDigest("slow-key-0")]; got != nil {
+		t.Fatalf("oldest credential retained %+v, want evicted", got)
+	}
+	if got := c.lastGood[credentialDigest("slow-key-100")]; got == nil {
+		t.Fatalf("middle credential lost, want retained (wholesale clear)")
+	} else if got["model"] != "proto-100" {
+		t.Fatalf("middle credential routes %+v, want proto-100", got)
+	}
+	if got := c.lastGood[credentialDigest(fmt.Sprintf("slow-key-%d", maxRouteCredentials+39))]; got == nil {
+		t.Fatal("newest credential lost, want retained")
+	}
+}
+
+// TestResolveBackoffSurfacesDiscoveryError asserts that while a
+// failed-refresh backoff is active, an id no fallback can route gets the
+// recorded transient discovery error (and no refetch), not invalid_model.
+func TestResolveBackoffSurfacesDiscoveryError(t *testing.T) {
+	client := &scriptedHostClient{status: 503}
+	c := newCatalog("", nil)
+	storage := []byte(`{"api_key":"example-key"}`)
+	_, err := c.resolve(context.Background(), "no-such-model", storage, nil, client)
+	var abiErr *pluginabi.Error
+	if err == nil || !errors.As(err, &abiErr) || abiErr.Code != "models_fetch_failed" {
+		t.Fatalf("first resolve got %v, want models_fetch_failed", err)
+	}
+	_, err = c.resolve(context.Background(), "no-such-model", storage, nil, client)
+	if err == nil || !errors.As(err, &abiErr) || abiErr.Code != "models_fetch_failed" {
+		t.Fatalf("backoff resolve got %v, want models_fetch_failed", err)
+	}
+	if got := client.callCount(); got != 1 {
+		t.Fatalf("discovery calls=%d, want 1 (backoff suppresses refetch)", got)
+	}
+}
+
+// cancelParentOnDo cancels the parent context on the first Do, simulating
+// a caller disconnecting mid-refresh.
+type cancelParentOnDo struct {
+	*scriptedHostClient
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (w *cancelParentOnDo) Do(ctx context.Context, req pluginapi.HTTPRequest) (pluginapi.HTTPResponse, error) {
+	w.once.Do(w.cancel)
+	// Block until the derived request context observes the cancellation.
+	w.scriptedHostClient.block = true
+	return w.scriptedHostClient.Do(ctx, req)
+}
+
+// TestCallerCancellationDoesNotOpenBackoff asserts a caller cancellation
+// during a route refresh writes no failed-refresh backoff, so the next
+// request still attempts discovery.
+func TestCallerCancellationDoesNotOpenBackoff(t *testing.T) {
+	inner := &scriptedHostClient{status: 503}
+	parent, cancel := context.WithCancel(context.Background())
+	client := &cancelParentOnDo{scriptedHostClient: inner, cancel: cancel}
+	c := newCatalog("", nil)
+	storage := []byte(`{"api_key":"example-key"}`)
+	_, err := c.resolve(parent, "no-such-model", storage, nil, client)
+	if err == nil {
+		t.Fatal("canceled refresh got no error")
+	}
+	_, err = c.resolve(context.Background(), "no-such-model", storage, nil, inner)
+	if err == nil {
+		t.Fatal("follow-up refresh got no error")
+	}
+	if got := inner.callCount(); got != 2 {
+		t.Fatalf("discovery calls=%d, want 2 (no backoff after caller cancellation)", got)
 	}
 }
 

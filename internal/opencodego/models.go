@@ -58,6 +58,13 @@ func staticModelInfos() []pluginapi.ModelInfo {
 	return out
 }
 
+// maxRouteCredentials bounds the per-credential route stores. It mirrors
+// the kit ModelCatalog's last-good bound (maxLastGoodGenerations = 256) so
+// plugin-side routes are evicted oldest-first at the same generation
+// count as the model lists they describe, instead of losing every
+// credential's routes when one more credential arrives.
+const maxRouteCredentials = 256
+
 type catalogEntry struct {
 	routes  map[string]string
 	expires time.Time
@@ -65,6 +72,10 @@ type catalogEntry struct {
 	// snapshot. It stops inference requests from repeating a failing
 	// discovery call on every request, and never satisfies validate.
 	negative bool
+	// err records the discovery failure that opened this backoff, so
+	// requests blocked by the backoff surface the same transient error
+	// for an otherwise unresolvable id instead of invalid_model.
+	err error
 }
 
 // catalog embeds the kit ModelCatalog (model serving, single-flight and the
@@ -74,11 +85,13 @@ type catalogEntry struct {
 // per design §5.
 type catalog struct {
 	*kit.ModelCatalog
-	base     func() string
-	client   *kit.QuotaHTTPClient
-	mu       sync.Mutex
-	cache    map[[32]byte]catalogEntry
-	lastGood map[[32]byte]map[string]string
+	base          func() string
+	client        *kit.QuotaHTTPClient
+	mu            sync.Mutex
+	cache         map[[32]byte]catalogEntry
+	cacheOrder    [][32]byte // insertion order of cache keys, for oldest-first eviction
+	lastGood      map[[32]byte]map[string]string
+	lastGoodOrder [][32]byte // insertion order of lastGood keys, for oldest-first eviction
 }
 
 func newCatalog(base string, transport http.RoundTripper) *catalog {
@@ -210,44 +223,73 @@ func (c *catalog) validate(_ context.Context, req pluginapi.AuthModelRequest, mo
 	return out, nil
 }
 
+// evictOldestLocked drops the oldest entries, oldest-first, until the
+// store is within maxRouteCredentials. The last-good store's eviction
+// is independent of the fresh cache's expiry, so slow credential
+// rotation still bounds it and one new credential never clears every
+// other credential's last-good routes. Callers hold mu.
+func evictOldestLocked[V any](store map[[32]byte]V, order *[][32]byte) {
+	for len(*order) > maxRouteCredentials {
+		delete(store, (*order)[0])
+		*order = (*order)[1:]
+	}
+}
+
+// noteLocked records a key's first insertion for oldest-first eviction.
+// Re-storing an existing key keeps its original position. Callers hold mu.
+func noteLocked[V any](store map[[32]byte]V, order *[][32]byte, digest [32]byte) {
+	if _, ok := store[digest]; !ok {
+		*order = append(*order, digest)
+	}
+}
+
 func (c *catalog) storeRoutes(key string, routes map[string]string) {
 	digest := credentialDigest(key)
 	c.mu.Lock()
 	c.evictLocked()
-	if len(c.cache) >= 256 {
-		clear(c.cache)
-		clear(c.lastGood)
-	}
+	noteLocked(c.cache, &c.cacheOrder, digest)
 	c.cache[digest] = catalogEntry{routes: routes, expires: time.Now().Add(catalogTTL)}
 	// The durable per-credential last-good map keeps routes for models the
 	// kit catalog still serves after a later discovery outage, so they do
-	// not lose their protocols when the fresh entry expires.
+	// not lose their protocols when the fresh entry expires. It evicts
+	// oldest-first at its own bound (mirroring the kit's last-good
+	// bound), never by wholesale clear.
+	noteLocked(c.lastGood, &c.lastGoodOrder, digest)
 	c.lastGood[digest] = routes
+	evictOldestLocked(c.cache, &c.cacheOrder)
+	evictOldestLocked(c.lastGood, &c.lastGoodOrder)
 	c.mu.Unlock()
 }
 
 // storeNegative records a failed-refresh backoff for this credential: the
 // static snapshot with a catalogTTL expiry. It never touches lastGood and
 // never satisfies validate, so a failed refresh never publishes routes.
-func (c *catalog) storeNegative(key string) {
+func (c *catalog) storeNegative(key string, ferr error) {
 	digest := credentialDigest(key)
 	c.mu.Lock()
 	c.evictLocked()
-	if len(c.cache) >= 256 {
-		clear(c.cache)
-	}
-	c.cache[digest] = catalogEntry{routes: staticRoutes(), expires: time.Now().Add(catalogTTL), negative: true}
+	noteLocked(c.cache, &c.cacheOrder, digest)
+	c.cache[digest] = catalogEntry{routes: staticRoutes(), expires: time.Now().Add(catalogTTL), negative: true, err: ferr}
+	evictOldestLocked(c.cache, &c.cacheOrder)
 	c.mu.Unlock()
 }
 
-// evictLocked drops expired cache entries; the durable lastGood map is
-// retained so outage fallback keeps validated routes.
+// evictLocked drops expired cache entries and compacts their order
+// records; the durable lastGood map is retained so outage fallback keeps
+// validated routes until its own bound evicts the oldest credentials.
 func (c *catalog) evictLocked() {
 	for k, v := range c.cache {
 		if time.Now().After(v.expires) {
 			delete(c.cache, k)
 		}
 	}
+	kept := c.cacheOrder[:0]
+	for _, k := range c.cacheOrder {
+		if _, ok := c.cache[k]; ok {
+			kept = append(kept, k)
+		}
+	}
+	c.cacheOrder = kept
 }
 
 // routes returns the fresh route entry for this credential, or nil when it
@@ -264,13 +306,19 @@ func (c *catalog) routes(key string) map[string]string {
 }
 
 // backoff reports whether this credential is inside a failed-refresh
-// backoff window and inference must not repeat the discovery call.
-func (c *catalog) backoff(key string) bool {
+// backoff window and inference must not repeat the discovery call. It
+// also returns the discovery error that opened the window, so an id
+// that no fallback can route surfaces the transient error rather than
+// looking like an invalid model.
+func (c *catalog) backoff(key string) (bool, error) {
 	digest := credentialDigest(key)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.cache[digest]
-	return ok && entry.negative && time.Now().Before(entry.expires)
+	if !ok || !entry.negative || !time.Now().Before(entry.expires) {
+		return false, nil
+	}
+	return true, entry.err
 }
 
 // lastGoodRoutes returns the durable last successfully validated routes for
@@ -307,14 +355,17 @@ func (c *catalog) resolve(ctx context.Context, id string, storage []byte, metada
 	}
 	routes := c.routes(key)
 	var ferr error
-	if routes == nil && client != nil && !c.backoff(key) {
+	inBackoff, backoffErr := c.backoff(key)
+	if routes == nil && client != nil && !inBackoff {
 		fctx, cancel := context.WithTimeout(ctx, kit.ModelsFetchTimeout)
 		_, ferr = c.fetch(fctx, pluginapi.AuthModelRequest{StorageJSON: storage, Metadata: metadata, HTTPClient: client})
 		cancel()
 		if ferr == nil {
 			routes = c.routes(key)
-		} else {
-			c.storeNegative(key)
+		} else if ctx.Err() == nil {
+			// A caller cancellation is not a discovery outage: it must
+			// not open a backoff window that blocks the next request.
+			c.storeNegative(key, ferr)
 		}
 	}
 	if routes == nil {
@@ -328,6 +379,9 @@ func (c *catalog) resolve(ctx context.Context, id string, storage []byte, metada
 	}
 	if ferr != nil {
 		return "", ferr
+	}
+	if backoffErr != nil {
+		return "", backoffErr
 	}
 	return "", &pluginabi.Error{Code: "invalid_model", Message: "model absent from OpenCode Go catalog or has no known protocol", HTTPStatus: 400}
 }

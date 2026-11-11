@@ -562,7 +562,7 @@ func sseFrame(raw []byte) []byte {
 	return append(append([]byte("data: "), raw...), '\n', '\n')
 }
 
-// v8.0.49 exposes Chat/Messages/Gemini -> Responses wire conversion under the
+// v8.0.63 exposes Chat/Messages/Gemini -> Responses wire conversion under the
 // SDK's "codex" format, not "openai-response". We reuse that schema conversion
 // only: never a Codex endpoint/auth flow, and never its token-limit stripping.
 func restoreResponsesControls(out map[string]json.RawMessage, raw []byte, source tr.Format) {

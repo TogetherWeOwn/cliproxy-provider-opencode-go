@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	kit "github.com/TogetherWeOwn/cliproxy-provider-kit"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
@@ -242,6 +243,15 @@ func TestStreamErrorsUseSameNativeClassification(t *testing.T) {
 	var pe *pluginabi.Error
 	if !errors.As(err, &pe) || pe.Code != "quota_exhausted_weekly" || pe.RetryAfterSeconds != 900 {
 		t.Fatalf("classification %v", err)
+	}
+	// The scoped 429 on a stream request must surface credential-scoped
+	// through the kit runtime: MapError is the carrier for the initial
+	// ExecuteStream error and for stream error_detail envelopes.
+	if !pe.CredentialScoped || pe.HTTPStatus != 429 {
+		t.Fatalf("stream classification %v, want credential-scoped 429", pe)
+	}
+	if mapped := kit.MapError(err); !mapped.CredentialScoped || mapped.Code != "quota_exhausted_weekly" || mapped.RetryAfterSeconds != 900 {
+		t.Fatalf("kit runtime carrier dropped the scoped pair: %+v", mapped)
 	}
 }
 

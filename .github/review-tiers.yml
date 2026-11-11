@@ -1,0 +1,64 @@
+# Highest changed-file tier wins; sensitive wins overlaps. Unmatched and new
+# paths are sensitive. Globs are repo-relative minimatch patterns.
+# Every PR gets QA; sensitive, unclassified, or escalated changes get Security
+# followed by QA. QA verifies the author's risk_tier; this file is sensitive.
+#
+# Content always escalates to sensitive regardless of path: new or changed
+# public endpoints or input parsing; auth/authz/session; crypto/key handling;
+# secrets/credentials; permissions; tenant isolation/personal data;
+# SQL/schema/migrations; dependencies and lockfiles (including dev deps);
+# CI/workflows; weakened assertions, deleted tests/snapshots or lowered test
+# gates. Low tests, if added later, are additive-only, not an exemption.
+#
+# README prose is the only low allowlist. Sensitive content triggers still
+# apply to it. No runtime module has been audited for ordinary: such an audit
+# must establish no untrusted input, sensitive output, permissions, persistence
+# or trust-boundary effect. Sensitive-floor downgrades need Security approval.
+
+version: 1
+default_tier: sensitive
+tiers:
+  low:
+    - "README.md"
+  ordinary: []
+  sensitive:
+    # Review policy, automation, ownership and repository governance.
+    - ".github/**"
+    - "CODEOWNERS"
+    - "**/CODEOWNERS"
+    - "rulesets/**"
+    - "**/rulesets/**"
+    - "CONTRIBUTING.md"
+    - "SECURITY.md"
+    - "REVIEW.md"
+    # Agent instructions, skills and tool permissions at any depth.
+    - "AGENTS.md"
+    - "**/AGENTS.md"
+    - ".claude/**"
+    - "**/.claude/**"
+    - "skills/**"
+    - "**/skills/**"
+    # Dependencies, build, installation, release and deployment.
+    - "go.mod"
+    - "go.sum"
+    - "**/go.mod"
+    - "**/go.sum"
+    - "Makefile"
+    - "**/Makefile"
+    - "Dockerfile*"
+    - "**/Dockerfile*"
+    - "scripts/**"
+    - "**/scripts/**"
+    - "deploy/**"
+    - "**/deploy/**"
+    - "infra/**"
+    - "**/infra/**"
+    - "registry.json"
+    # Production code and integration/release tests cross trust boundaries;
+    # auth, networking, input parsing and quota credentials live here.
+    - "cmd/**"
+    - "internal/**"
+    - "integration/**"
+    # Migration/provenance documentation carries operational security context.
+    - "docs/MIGRATION.md"
+    - "docs/PROVENANCE.md"

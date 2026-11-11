@@ -45,6 +45,11 @@ func classifyAt(r pluginapi.HTTPResponse, now time.Time) error {
 			e.Message = "OpenCode Go usage limit reached"
 			e.HTTPStatus = 429
 			e.Retryable = true
+			// Per-credential subscription usage windows, not per-model limits:
+			// the whole credential is out of quota, so the host cools it across
+			// all models. Kit v0.6.0 passes *pluginabi.Error through MapError,
+			// and the v8.0.63 host cools the credential until RetryAfterSeconds.
+			e.CredentialScoped = true
 			switch wire.Metadata.LimitName {
 			case "5 hour":
 				e.Code += "_5h"
@@ -52,6 +57,12 @@ func classifyAt(r pluginapi.HTTPResponse, now time.Time) error {
 				e.Code += "_weekly"
 			case "monthly":
 				e.Code += "_monthly"
+			}
+			// Prefer a reset carried by the upstream error body (resets_at /
+			// "resets at" text) over the header fallback; a longer server
+			// Retry-After still wins so a known reset is never shortened.
+			if reset := kit.ResetRetryAfterSeconds(r.Body, now); reset > e.RetryAfterSeconds {
+				e.RetryAfterSeconds = reset
 			}
 			if e.RetryAfterSeconds == 0 {
 				e.RetryAfterSeconds = 60

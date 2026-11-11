@@ -1,14 +1,15 @@
 module github.com/TogetherWeOwn/cliproxy-provider-opencode-go
 
-go 1.26.10
+go 1.26.11
 
 require (
-	github.com/TogetherWeOwn/cliproxy-provider-kit v0.5.0
-	github.com/router-for-me/CLIProxyAPI/v8 v8.0.49
+	github.com/TogetherWeOwn/cliproxy-provider-kit v0.6.0
+	github.com/router-for-me/CLIProxyAPI/v8 v8.0.63
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
+	github.com/MoeForge/moego v0.1.0-alpha.1 // indirect
 	github.com/bytedance/sonic v1.11.6 // indirect
 	github.com/bytedance/sonic/loader v0.1.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -31,12 +32,9 @@ require (
 	github.com/pelletier/go-toml/v2 v2.4.3-0.20260624044523-35f78d5908f1 // indirect
 	github.com/redis/go-redis/v9 v9.19.0 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
-	github.com/tidwall/gjson v1.18.0 // indirect
-	github.com/tidwall/match v1.1.1 // indirect
-	github.com/tidwall/pretty v1.2.0 // indirect
-	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.2.12 // indirect
+	go.etcd.io/bbolt v1.5.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/arch v0.8.0 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
